@@ -68,7 +68,7 @@ IMKSwift 重新匯出並增強了以下 InputMethodKit 元件：
 import IMKSwift
 
 class MyInputMethodController: IMKInputController {
-  override func handle(_ event: NSEvent?, client sender: some IMKTextInput) -> Bool {
+  override func handle(_ event: NSEvent?, client sender: any IMKTextInput) -> Bool {
     // 具有完整型別安全的事件處理
     guard let event else { return false }
     
@@ -76,12 +76,12 @@ class MyInputMethodController: IMKInputController {
     return true
   }
   
-  override func inputText(_ string: String, client sender: some IMKTextInput) -> Bool {
+  override func inputText(_ string: String, client sender: any IMKTextInput) -> Bool {
     // 文字輸入處理
     return true
   }
   
-  override func candidates(_ sender: some IMKTextInput) -> [Any]? {
+  override func candidates(_ sender: any IMKTextInput) -> [Any]? {
     // 返回候選字詞建議
     return nil
   }

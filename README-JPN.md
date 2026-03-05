@@ -68,7 +68,7 @@ Swift 6 の厳密な並行処理モデルを念頭に置いて設計されてい
 import IMKSwift
 
 class MyInputMethodController: IMKInputController {
-  override func handle(_ event: NSEvent?, client sender: some IMKTextInput) -> Bool {
+  override func handle(_ event: NSEvent?, client sender: any IMKTextInput) -> Bool {
     // 完全な型安全性を備えたイベント処理
     guard let event else { return false }
     
@@ -76,12 +76,12 @@ class MyInputMethodController: IMKInputController {
     return true
   }
   
-  override func inputText(_ string: String, client sender: some IMKTextInput) -> Bool {
+  override func inputText(_ string: String, client sender: any IMKTextInput) -> Bool {
     // テキスト入力処理
     return true
   }
   
-  override func candidates(_ sender: some IMKTextInput) -> [Any]? {
+  override func candidates(_ sender: any IMKTextInput) -> [Any]? {
     // 候補提案を返す
     return nil
   }

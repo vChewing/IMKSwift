@@ -68,7 +68,7 @@ Then add it as a dependency to your target:
 import IMKSwift
 
 class MyInputMethodController: IMKInputController {
-  override func handle(_ event: NSEvent?, client sender: some IMKTextInput) -> Bool {
+  override func handle(_ event: NSEvent?, client sender: any IMKTextInput) -> Bool {
     // Event handling with full type safety
     guard let event else { return false }
     
@@ -76,12 +76,12 @@ class MyInputMethodController: IMKInputController {
     return true
   }
   
-  override func inputText(_ string: String, client sender: some IMKTextInput) -> Bool {
+  override func inputText(_ string: String, client sender: any IMKTextInput) -> Bool {
     // Text input handling
     return true
   }
   
-  override func candidates(_ sender: some IMKTextInput) -> [Any]? {
+  override func candidates(_ sender: any IMKTextInput) -> [Any]? {
     // Return candidate suggestions
     return nil
   }
