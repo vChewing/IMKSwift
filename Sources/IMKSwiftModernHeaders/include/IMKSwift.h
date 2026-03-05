@@ -513,12 +513,19 @@
 /// created.  You typically do not call it yourself — `IMKServer` instantiates
 /// controllers on your behalf.
 ///
+/// - warning: `client()` on macOS 10.9 ~ 10.12 returns `nil` until this
+/// constructor finishes, even though `super.init` has already been called.
+/// It is recommended that you use the client object passed as a parameter instead.
+///
 /// @param server      The `IMKServer` that owns this controller.
 /// @param delegate    An optional delegate object.  If `nil`, the controller
 ///                    itself handles all delegate duties.
 /// @param inputClient The text-input client for this session.  The client
 ///                    conforms to `IMKTextInput` and represents the text view
-///                    in the client application.
+///                    in the client application. If you are subclassing this
+///                    class and you want to access the client during this
+///                    construction process, please use this parameter prior to
+///                    using `client()`. See `warning` section in the documentation.
 /// @return A newly initialized input session controller.
 - (nonnull instancetype)initWithServer:(nonnull IMKServer *)server
                               delegate:(nullable id)delegate
