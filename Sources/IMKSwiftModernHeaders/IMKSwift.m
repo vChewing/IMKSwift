@@ -4,7 +4,7 @@
 
 #import <Foundation/Foundation.h>
 #import <InputMethodKit/InputMethodKit.h>
-#import "IMKSwift.h"
+#import "include/IMKSwift.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
