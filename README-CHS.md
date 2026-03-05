@@ -56,7 +56,7 @@ IMKSwift 重新导出并增强了以下 InputMethodKit 组件：
 在你的 `Package.swift` 中添加 IMKSwift：
 
 ```swift
-.package(url: "https://github.com/vChewing/IMKSwift.git", from: "26.03.05"),
+.package(url: "https://github.com/vChewing/IMKSwift.git", from: "26.03.06"),
 ```
 
 然后将其添加为目标的依赖：

@@ -56,7 +56,7 @@ Swift 6 の厳密な並行処理モデルを念頭に置いて設計されてい
 `Package.swift` に IMKSwift を追加します：
 
 ```swift
-.package(url: "https://github.com/vChewing/IMKSwift.git", from: "26.03.05"),
+.package(url: "https://github.com/vChewing/IMKSwift.git", from: "26.03.06"),
 ```
 
 その後、ターゲットの依存関係として追加します：
