@@ -322,7 +322,9 @@ companion Swift モジュールでは、`IMKInputSessionController` は `IMKInpu
 
 ## 関連プロジェクト
 
-このライブラリは [vChewing プロジェクト](https://github.com/vChewing) の一部です。これは macOS 用の最新のオープンソース入力メソッド フレームワークです。
+このライブラリは [vChewing プロジェクト](https://github.com/vChewing) の一部です。macOS プラットフォームで最も高速な音韻類中国語入力メソッドであり、大千声韻並撃打ち込み原理と DAG-DP 言葉構成技術に基づいており、簡体字中国語と繁体字中国語の両方をネイティブにサポートしています。
+
+vChewing プロジェクトはこのパッケージを社会に提供し、寄付を歓迎しています。詳細については、[vChewing 入力メソッドのホームページ](https://vchewing.github.io/README.html)をご覧ください。
 
 ## ライセンス
 

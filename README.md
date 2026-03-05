@@ -322,7 +322,9 @@ A main-actor-isolated protocol that encompasses:
 
 ## Related Projects
 
-This library is part of the [vChewing Project](https://github.com/vChewing), a modern, open-source input method framework for macOS.
+This library is part of the [vChewing Project](https://github.com/vChewing). It is the fastest phonetic Chinese input method for macOS, based on the Dachen (大千) consonant-vowel simultaneously-clapped keystroke typing principle and DAG-DP sentence formation technology, with native support for both Simplified and Traditional Chinese.
+
+The vChewing Project offers this package to society and welcomes donations. For more information, please visit the [vChewing Input Method homepage](https://vchewing.github.io/README.html).
 
 ## License
 
