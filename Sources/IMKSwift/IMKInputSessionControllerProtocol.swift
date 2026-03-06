@@ -20,9 +20,7 @@ extension IMKInputSessionController: IMKInputSessionControllerProtocol {}
 /// - Remark: This protocol is to help Swift developers designing
 /// other protocols or generic-based types.
 /// - Warning: Do not redefine this kind of protocols in Objective-C. Doing such
-/// will let you face issues of naming conflicts against certain ObjC methods:
-/// Protocols defined in ObjC, if used in Swift, always require the inheritance
-/// of NSObject.
+/// will let you face issues of naming conflicts against certain ObjC methods.
 @objc
 public protocol IMKInputSessionControllerProtocol: AnyObject {
   // -- IMKStateSetting surface --
