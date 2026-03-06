@@ -172,7 +172,7 @@ $(PRODUCT_BUNDLE_IDENTIFIER)_Connection
 
 **你的 `IMKInputSessionController` 子类不应直接持有业务逻辑对象。** 这对于处理高频率输入法切换（例如使用 CapsLock 在中英输入法之间切换）至关重要。
 
-当用户频繁切换输入法时，系统每次都会创建新的 `IMKInputController` 实例。如果你的控制器持有对大型对象的强引用，ARC 清理会造成明显的卡顿。
+当用户频繁切换输入法时，系统每次都会创建新的 `IMKInputController` 副本。如果你的控制器持有对大型对象的强引用，ARC 清理会造成明显的卡顿。
 
 **建议模式：** 使用以客户对象键的弱键缓存（`NSMapTable`）：
 

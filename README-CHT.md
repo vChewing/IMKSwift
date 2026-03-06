@@ -172,7 +172,7 @@ $(PRODUCT_BUNDLE_IDENTIFIER)_Connection
 
 **你的 `IMKInputSessionController` 子類別不應直接持有業務邏輯物件。** 這對於處理高頻率輸入法切換（例如使用 CapsLock 在中英輸入法之間切換）至關重要。
 
-當使用者頻繁切換輸入法時，系統每次都會建立新的 `IMKInputController` 實例。如果你的控制器持有對大型物件的強參照，ARC 清理會造成明顯的卡頓。
+當使用者頻繁切換輸入法時，系統每次都會建立新的 `IMKInputController` 副本。如果你的控制器持有對大型物件的強參照，ARC 清理會造成明顯的卡頓。
 
 **建議模式：** 使用以客戶端物件為鍵的弱鍵快取（`NSMapTable`）：
 
