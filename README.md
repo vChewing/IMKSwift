@@ -46,8 +46,10 @@ Built with Swift 6's strict concurrency model in mind. All APIs are properly iso
 ## Requirements
 
 - **Swift** 6.2 or later
-- **macOS** 10.13 or later (depending on Swift version used)
 - **Xcode** 16.0 or later
+- **macOS**:
+    - macOS 10.13 High Sierra or later (depending on your Swift version).
+    - The code itself can run on macOS 10.09 Mavericks, but requires the corresponding macOS SDK and libARCLite.
 
 ## Installation
 

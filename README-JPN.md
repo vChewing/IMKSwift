@@ -46,8 +46,10 @@ Swift 6 の厳密な並行処理モデルを念頭に置いて設計されてい
 ## 要件
 
 - **Swift** 6.2 以降
-- **macOS** 10.13 以降（ご使用の Swift のバージョンによる）
 - **Xcode** 16.0 以降
+- **macOS**:
+    - macOS 10.13 High Sierra とそれ以降（ご使用の Swift のバージョン次第）。
+    - コード自身は macOS 10.09 Mavericks で実行可であるが、それに応ずる macOS SDK と libARCLite が必要である。
 
 ## インストール
 

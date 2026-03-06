@@ -46,8 +46,10 @@ IMKSwift 重新匯出並增強了以下 InputMethodKit 元件：
 ## 系統需求
 
 - **Swift** 6.2 或更新版本
-- **macOS** 10.13 或更新版本（取決於使用的 Swift 版本）
 - **Xcode** 16.0 或更新版本
+- **macOS**：
+    - macOS 10.13 High Sierra 及更新版本（取決於使用的 Swift 版本）。
+    - 程式碼本身可在 macOS 10.09 Mavericks 上執行，但需要對應的 macOS SDK 與 libARCLite。
 
 ## 安裝
 
