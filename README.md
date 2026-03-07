@@ -58,7 +58,7 @@ Built with Swift 6's strict concurrency model in mind. All APIs are properly iso
 Add IMKSwift to your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/vChewing/IMKSwift.git", from: "26.03.06"),
+.package(url: "https://github.com/vChewing/IMKSwift.git", from: "26.03.07"),
 ```
 
 Then add it as a dependency to your target:
