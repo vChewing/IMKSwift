@@ -176,7 +176,9 @@ $(PRODUCT_BUNDLE_IDENTIFIER)_Connection
 
 ユーザーが入力メソッドを頻繁に切り替えると、システムは毎回新しい `IMKInputController` インスタンスを作成します。コントローラが大きなオブジェクトへの強参照を保持している場合、ARC クリーンアップに目に見えて遅延が発生します。
 
-**推奨パターン：** クライアントオブジェクトをキーとする弱キーキャッシュ（`NSMapTable`）を使用します：
+**推奨パターン：** 純粋な Swift 実装の LRU キャッシュ（容量 5）を使用し、クライアントオブジェクトの整数 RAM アドレスをキーとします。`NSMapTable` の弱キーアプローチとは異なり、Swift ネイティブの LRU テーブルは autoreleasepool の絡み合いを回避します——macOS 26.5 より前のシステムでは、これが入力メソッドとクライアントアプリケーションの両方をブロックする可能性があります。
+
+> **NSMapTable を使用しない理由：** `NSMapTable` が弱キーを解放する際、解放パスがメインスレッドで autoreleasepool の排出（drain）を同期的にトリガーする可能性があります。これにより、入力メソッドとクライアントアプリケーションの両方がブロックされます（macOS 26.5 より前のシステムでは、Chrome がランダムに 20 秒以内のハングを起こします）。固定容量の小さな純粋 Swift LRU キャッシュを使用することで、この問題を完全に回避できます——無制限の弱キーセマンティクスを犠牲に、決定的で制限されたメモリ動作を得られ、runloop をブロックすることは決してありません。
 
 ```swift
 import IMKSwift
@@ -185,10 +187,10 @@ import IMKSwift
 public final class MyInputMethodController: IMKInputSessionController {
   // セッションへの弱参照を使用
   weak var session: InputSession?
-  
+
   override public init(server: IMKServer, delegate: Any?, client inputClient: any IMKTextInput) {
     super.init(server: server, delegate: delegate, client: inputClient)
-    
+
     // セッションを初期化またはキャッシュから取得
     self.session = InputSessionCache.session(for: inputClient, controller: self)
   }
@@ -196,16 +198,29 @@ public final class MyInputMethodController: IMKInputSessionController {
 
 @MainActor
 final class InputSessionCache {
-  private static let cache = NSMapTable<NSObject, InputSession>.weakToStrongObjects()
-  
+  private static let capacity = 5
+  private static var keys: [Int] = []
+  private static var values: [InputSession] = []
+
   static func session(for client: any IMKTextInput, controller: MyInputMethodController) -> InputSession {
-    let clientObj = client as! NSObject
-    if let cached = cache.object(forKey: clientObj) {
+    let addr = Int(bitPattern: Unmanaged.passUnretained(client as AnyObject).toOpaque())
+    if let idx = keys.firstIndex(of: addr) {
+      let cached = values[idx]
+      // 最も最近使用されたものとして先頭に移動
+      keys.remove(at: idx)
+      values.remove(at: idx)
+      keys.insert(addr, at: 0)
+      values.insert(cached, at: 0)
       cached.reassign(controller: controller)
       return cached
     }
     let newSession = InputSession(controller: controller)
-    cache.setObject(newSession, forKey: clientObj)
+    keys.insert(addr, at: 0)
+    values.insert(newSession, at: 0)
+    if keys.count > capacity {
+      keys.removeLast()
+      values.removeLast()
+    }
     return newSession
   }
 }
@@ -213,16 +228,18 @@ final class InputSessionCache {
 @MainActor
 final class InputSession {
   weak var controller: MyInputMethodController?
-  
+
   init(controller: MyInputMethodController) {
     self.controller = controller
   }
-  
+
   func reassign(controller: MyInputMethodController) {
     self.controller = controller
   }
 }
 ```
+
+> **注意：** `Unmanaged.passUnretained` はここでは安全です——このポインタはクライアントオブジェクトの安定した識別子としてのみ使用され、決してデリファレンス（dereference）されません。`session(for:controller:)` の実行中は、クライアントオブジェクトが生存していることが保証されています（現在のテキスト入力クライアントです）。
 
 ### 4. Swift Package ライブラリとしてコードを構造化する
 

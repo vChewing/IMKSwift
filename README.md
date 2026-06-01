@@ -176,7 +176,9 @@ Here's a recommended `entitlements` file:
 
 When users switch input methods rapidly, the system creates new `IMKInputController` instances each time. If your controller holds strong references to heavy objects, ARC cleanup causes noticeable lag.
 
-**Recommended Pattern:** Use a weak-key cache (`NSMapTable`) keyed by the client object:
+**Recommended Pattern:** Use a pure-Swift LRU cache (capacity 5) keyed by the client object's integer RAM address. Unlike `NSMapTable`'s weak-key approach, a Swift-native LRU table avoids the autoreleasepool entanglement that can block both the IME and the client application on macOS versions prior to 26.5.
+
+> **Why not NSMapTable?** When `NSMapTable` releases a weak key, the deallocation path can synchronously invoke autoreleasepool draining on the main thread. This blocks both your input method and the client application (observed as random ≤20-second hangs in Chrome on pre-26.5 macOS). A pure-Swift LRU cache with a small fixed capacity avoids this entirely — you trade unbounded weak-key semantics for deterministic, bounded memory behavior that never blocks the runloop.
 
 ```swift
 import IMKSwift
@@ -185,10 +187,10 @@ import IMKSwift
 public final class MyInputMethodController: IMKInputSessionController {
   // Use weak reference to session
   weak var session: InputSession?
-  
+
   override public init(server: IMKServer, delegate: Any?, client inputClient: any IMKTextInput) {
     super.init(server: server, delegate: delegate, client: inputClient)
-    
+
     // Initialize or retrieve cached session
     self.session = InputSessionCache.session(for: inputClient, controller: self)
   }
@@ -196,16 +198,29 @@ public final class MyInputMethodController: IMKInputSessionController {
 
 @MainActor
 final class InputSessionCache {
-  private static let cache = NSMapTable<NSObject, InputSession>.weakToStrongObjects()
-  
+  private static let capacity = 5
+  private static var keys: [Int] = []
+  private static var values: [InputSession] = []
+
   static func session(for client: any IMKTextInput, controller: MyInputMethodController) -> InputSession {
-    let clientObj = client as! NSObject
-    if let cached = cache.object(forKey: clientObj) {
+    let addr = Int(bitPattern: Unmanaged.passUnretained(client as AnyObject).toOpaque())
+    if let idx = keys.firstIndex(of: addr) {
+      let cached = values[idx]
+      // Move to front (most-recently-used)
+      keys.remove(at: idx)
+      values.remove(at: idx)
+      keys.insert(addr, at: 0)
+      values.insert(cached, at: 0)
       cached.reassign(controller: controller)
       return cached
     }
     let newSession = InputSession(controller: controller)
-    cache.setObject(newSession, forKey: clientObj)
+    keys.insert(addr, at: 0)
+    values.insert(newSession, at: 0)
+    if keys.count > capacity {
+      keys.removeLast()
+      values.removeLast()
+    }
     return newSession
   }
 }
@@ -213,16 +228,18 @@ final class InputSessionCache {
 @MainActor
 final class InputSession {
   weak var controller: MyInputMethodController?
-  
+
   init(controller: MyInputMethodController) {
     self.controller = controller
   }
-  
+
   func reassign(controller: MyInputMethodController) {
     self.controller = controller
   }
 }
 ```
+
+> **Note:** `Unmanaged.passUnretained` is safe here — the pointer is used only as a stable identity for the client object, never dereferenced. The client is guaranteed alive while `session(for:controller:)` executes (it is the current text input client).
 
 ### 4. Structure as Swift Package Libraries
 

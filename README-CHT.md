@@ -176,7 +176,9 @@ $(PRODUCT_BUNDLE_IDENTIFIER)_Connection
 
 當使用者頻繁切換輸入法時，系統每次都會建立新的 `IMKInputController` 副本。如果你的控制器持有對大型物件的強參照，ARC 清理會造成明顯的卡頓。
 
-**建議模式：** 使用以客戶端物件為鍵的弱鍵快取（`NSMapTable`）：
+**建議模式：** 使用純 Swift 實作的 LRU 快取（容量 5），以客戶端物件的整數 RAM 位址作為鍵值。與 `NSMapTable` 的弱鍵方案不同，Swift 原生的 LRU 表可以避免 autoreleasepool 糾纏——在 macOS 26.5 之前的系統上，這種糾纏會同時阻塞輸入法和客戶端應用程式。
+
+> **為何不用 NSMapTable？** 當 `NSMapTable` 釋放弱鍵時，釋放路徑可能會在主執行緒上同步觸發 autoreleasepool 排乾（drain）。這會同時阻塞你的輸入法和客戶端應用程式（在 macOS 26.5 之前的系統上，Chrome 會隨機卡頓 ≤20 秒）。使用固定容量的小型純 Swift LRU 快取可以完全避免此問題——你以放棄無界弱鍵語義為代價，換取確定性、有限的記憶體行為，絕不會阻塞 runloop。
 
 ```swift
 import IMKSwift
@@ -185,10 +187,10 @@ import IMKSwift
 public final class MyInputMethodController: IMKInputSessionController {
   // 使用對會話的弱參照
   weak var session: InputSession?
-  
+
   override public init(server: IMKServer, delegate: Any?, client inputClient: any IMKTextInput) {
     super.init(server: server, delegate: delegate, client: inputClient)
-    
+
     // 初始化或取得快取的會話
     self.session = InputSessionCache.session(for: inputClient, controller: self)
   }
@@ -196,16 +198,29 @@ public final class MyInputMethodController: IMKInputSessionController {
 
 @MainActor
 final class InputSessionCache {
-  private static let cache = NSMapTable<NSObject, InputSession>.weakToStrongObjects()
-  
+  private static let capacity = 5
+  private static var keys: [Int] = []
+  private static var values: [InputSession] = []
+
   static func session(for client: any IMKTextInput, controller: MyInputMethodController) -> InputSession {
-    let clientObj = client as! NSObject
-    if let cached = cache.object(forKey: clientObj) {
+    let addr = Int(bitPattern: Unmanaged.passUnretained(client as AnyObject).toOpaque())
+    if let idx = keys.firstIndex(of: addr) {
+      let cached = values[idx]
+      // 移至最前（最近使用）
+      keys.remove(at: idx)
+      values.remove(at: idx)
+      keys.insert(addr, at: 0)
+      values.insert(cached, at: 0)
       cached.reassign(controller: controller)
       return cached
     }
     let newSession = InputSession(controller: controller)
-    cache.setObject(newSession, forKey: clientObj)
+    keys.insert(addr, at: 0)
+    values.insert(newSession, at: 0)
+    if keys.count > capacity {
+      keys.removeLast()
+      values.removeLast()
+    }
     return newSession
   }
 }
@@ -213,16 +228,18 @@ final class InputSessionCache {
 @MainActor
 final class InputSession {
   weak var controller: MyInputMethodController?
-  
+
   init(controller: MyInputMethodController) {
     self.controller = controller
   }
-  
+
   func reassign(controller: MyInputMethodController) {
     self.controller = controller
   }
 }
 ```
+
+> **注意：** `Unmanaged.passUnretained` 在這裡是安全的——該指標僅用作客戶端物件的穩定識別碼，絕不會被解參照（dereference）。在 `session(for:controller:)` 執行期間，客戶端物件保證存活（它是當前的文字輸入客戶端）。
 
 ### 4. 以 Swift Package 函式庫形式組織程式碼
 
