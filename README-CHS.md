@@ -17,11 +17,11 @@ InputMethodKit 的历史可追溯到 macOS 10.5 Leopard——早于 ARC、Sandbo
 
 ## 为什么使用 IMKInputSessionController？
 
-Apple 的 `IMKInputController` 设计上是在 MainActor 上运行的，但其 Objective-C 头文件缺乏适当的 `@MainActor` 标注。当导入 Swift 时，这会产生根本性的问题：原始 SDK 头文件暴露的 API 没有线程隔离，导致在 Swift 6 严格模式下出现**无法解决的并发检查错误**。
+Apple 的 `IMKInputController` 设计上是在 MainActor 上运行的，但其 Objective-C 头文件缺乏适当的 `@MainActor` 标注。当导入 Swift 时，这会产生根本性问题：原始 SDK 头文件暴露的 API 没有线程隔离，导致在 Swift 6 严格模式下出现**无法解决的并发检查错误**。
 
-**在 Swift 6 中你根本无法直接使用 `IMKInputController`。** 即使你尝试直接覆盖头文件，Swift 仍然会读取原始的 Xcode SDK 头文件，导致 API 冲突。唯一的解决方案是使用**不同名称的子类**——`IMKInputSessionController`——它继承了所有功能，同时提供正确标注 `@MainActor` 的 API。
+**在 Swift 6 中你根本无法直接使用 `IMKInputController`。** 即使你尝试直接覆盖头文件，Swift 仍然会读取原始的 Xcode SDK 头文件，导致 API 冲突。`IMKInputSessionController` 提供了干净、经 `@MainActor` 隔离的 API 表面。
 
-> ⚠️ **重要：** 如果你在 Swift 6 中直接子类化 `IMKInputController`，你将面临编译错误，而这些错误只能通过丑陋的指针操作来「修复」，强行将对象塞到 `@MainActor` 上。别这么做。请使用 `IMKInputSessionController`。
+> ⚠️ **禁止 subclass `IMKInputSessionController`。** 从 v26.07.24 起，IMKSwift 采用**基于注入（Injection）的架构**。subclass 会将 controller 的生命周期（`alloc` / `dealloc` / `retain` / `release`）暴露给 Swift ARC，重新引入导致 CapsLock 切换卡顿的 MainActor 竞争条件。取而代之的是，所有 IMK 回调均由 class-level static blocks 在 `applicationDidFinishLaunching` 中注入。Controller 生命周期完全留在 ObjC MRC（`-fno-objc-arc`）内，Swift 仅透过 raw `uintptr_t` 位址与 controller 交互——绝不经过 ARC 管理的引用。
 
 ## 功能特性
 
@@ -58,7 +58,7 @@ IMKSwift 重新导出并增强了以下 InputMethodKit 组件：
 在你的 `Package.swift` 中添加 IMKSwift：
 
 ```swift
-.package(url: "https://github.com/vChewing/IMKSwift.git", from: "26.03.07"),
+.package(url: "https://github.com/vChewing/IMKSwift.git", from: "26.07.24"),
 ```
 
 然后将其添加为目标的依赖：
@@ -74,29 +74,126 @@ IMKSwift 重新导出并增强了以下 InputMethodKit 组件：
 
 ## 使用方式
 
-### 基本输入法控制器设置
+### 部署架构总览
+
+IMKSwift 从 v26.07.24 起采用了**基于注入（Injection）的架构**，不再需要 subclass `IMKInputSessionController`。所有 IMK 回调均通过 class-level static blocks 注入——在启动时一次性设定，由所有 controller 实例共享。
+
+**Info.plist 配置：** 直接将 controller class 声明为 `IMKInputSessionController`（无需自定义子类）。以下 keys 必须全部指向 `IMKInputSessionController`，以确保 controller 生命周期绝不接触 Swift ARC：
+
+```xml
+<key>InputMethodConnectionName</key>
+<string>$(PRODUCT_BUNDLE_IDENTIFIER)_Connection</string>
+<key>InputMethodServerControllerClass</key>
+<string>IMKInputSessionController</string>
+<key>InputMethodServerDataSourceClass</key>
+<string>IMKInputSessionController</string>
+<key>InputMethodServerDelegateClass</key>
+<string>IMKInputSessionController</string>
+<key>InputMethodSessionController</key>
+<string>IMKInputSessionController</string>
+```
+
+**编译配置：** 你的工程需要同时依赖 IMKSwift 的两个 target，并对 `IMKSwiftModernHeaders` 设定 `-fno-objc-arc`：
+
+```swift
+// Package.swift
+.target(
+  name: "IMKSwiftModernHeaders",
+  cSettings: [.unsafeFlags(["-fno-objc-arc"])]
+),
+```
+
+**启动注入：** 所有 IMK 回调通过 configure blocks 在 `applicationDidFinishLaunching` 阶段一次性注入。每个 block 接收 raw `uintptr_t` 位址（而非 ObjC 对象引用）——不执行 retain/release，彻底避开 ARC 开销。Swift 端通过 raw 位址查询 controller 对应的 session 并路由到业务逻辑。
+
+### 可用的 Configure Blocks
+
+| Block | 用途 | 签名 |
+|-------|------|------|
+| `configureActivatingServer` | Controller 被启用 | `(clientAddr, selfAddr) -> Void` |
+| `configureDeactivatingServer` | Controller 被停用 | `(clientAddr, selfAddr) -> Void` |
+| `configureDealloc` | Controller 即将释放 | `(selfAddr) -> Void` |
+| `configureShowingPreferences` | 显示偏好设定 | `(clientAddr, selfAddr) -> Void` |
+| `configureHidingPallettes` | 隐藏 UI 面板 | `(selfAddr) -> Void` |
+| `configureInputControllerWillClose` | Controller 即将关闭 | `(selfAddr) -> Void` |
+| `configureProvidingSelectionRange` | 提供选取范围 | `(selfAddr) -> NSRange` |
+| `configureProvidingIMEMenu` | 构建 IME 选单 | `(selfAddr) -> NSMenu?` |
+| `configureProvidingComposedString` | 提供组字内容 | `(clientAddr, selfAddr) -> Any?` |
+| `configureAutoCommittingComposition` | 自动递交组字 | `(clientAddr, selfAddr) -> Void` |
+| `configureProvidingRecognizedEvents` | 已识别的事件遮罩 | `(clientAddr, selfAddr) -> NSUInteger` |
+| `configureHandlingGivenNullableEvent` | 处理 NSEvent | `(nsEventPtr, clientAddr, selfAddr) -> Bool` |
+| `configureSettingObjCValue` | 处理 `setValue:` | `(valuePtr, tag, clientAddr, selfAddr) -> Void` |
+
+> **注意：** 所有位址均为 `uintptr_t`。使用 `UnsafeRawPointer(bitPattern:)` + `Unmanaged<...>.fromOpaque(...).takeUnretainedValue()` 在 Swift 端恢复对象。每次 `takeUnretainedValue()` 前应以 `IMKControllerLifetimeTracker` 复查 controller 是否仍存活。
+
+### 基本注入示例
 
 ```swift
 import IMKSwift
 
-@objc(MyInputMethodController)
-public final class MyInputMethodController: IMKInputSessionController {
-  override public func handle(_ event: NSEvent?, client sender: any IMKTextInput) -> Bool {
-    // 具有完整类型安全的事件处理
-    guard let event else { return false }
-    
-    // 处理输入...
-    return true
+// ── applicationDidFinishLaunching 时一次性注入 ──
+
+IMKInputSessionController.configureActivatingServer { clientAddr, selfAddr in
+  // controller 被激活：将 selfAddr 路由到对应的 InputSession
+  guard let session = InputSession.session(for: selfAddr) else { return }
+  session.activate()
+}
+
+IMKInputSessionController.configureDeactivatingServer { clientAddr, selfAddr in
+  guard let session = InputSession.session(for: selfAddr) else { return }
+  session.deactivate()
+}
+
+IMKInputSessionController.configureDealloc { selfAddr in
+  // controller 即将释放：清理 session 映射，终止 XPC 连线
+  InputSession.cleanupController(addr: selfAddr)
+}
+
+IMKInputSessionController.configureHandlingGivenNullableEvent { nsEventPtr, clientAddr, selfAddr in
+  guard let session = InputSession.session(for: selfAddr) else { return false }
+  let event = Unmanaged<NSEvent>.fromOpaque(
+    UnsafeRawPointer(bitPattern: nsEventPtr)!
+  ).takeUnretainedValue()
+  return session.handle(event: event)
+}
+
+IMKInputSessionController.configureShowingPreferences { clientAddr, selfAddr in
+  // 叫出偏好设定画面
+  InputSession.showPreferences()
+}
+
+IMKInputSessionController.configureProvidingIMEMenu { selfAddr in
+  // 动态构建 IME 选单
+  return InputSession.buildMenu(for: selfAddr)
+}
+
+IMKInputSessionController.configureProvidingComposedString { clientAddr, selfAddr in
+  guard let session = InputSession.session(for: selfAddr) else { return nil }
+  return session.currentComposedString
+}
+
+// ── 业务逻辑（纯 Swift，不继承任何 IMK 类型）──
+
+@MainActor
+public final class InputSession {
+  /// 极性双缓冲 Session 池：两枚 singleton，以 controller generation parity 路由。
+  fileprivate static let sessionEven = InputSession(preallocated: ())
+  fileprivate static let sessionOdd  = InputSession(preallocated: ())
+
+  /// 依 raw controller 位址的 generation parity 解析对应 session。
+  static func session(for ctlAddr: UInt) -> InputSession? {
+    let tracker = IMKControllerLifetimeTracker.shared()
+    guard tracker.isAddressAlive(ctlAddr) else { return nil }
+    let parity = tracker.generationForAddress(ctlAddr) % 2
+    return parity == 0 ? sessionEven : sessionOdd
   }
-  
-  override func inputText(_ string: String, client sender: any IMKTextInput) -> Bool {
-    // 文本输入处理
-    return true
+
+  static func cleanupController(addr: UInt) {
+    // 3 秒延迟释放 + XPC 清理（详见最佳实践 #3）
   }
-  
-  override func candidates(_ sender: any IMKTextInput) -> [Any]? {
-    // 返回候选词建议
-    return nil
+
+  func handle(event: NSEvent) -> Bool {
+    // 处理键盘事件
+    return true
   }
 }
 ```
@@ -113,7 +210,7 @@ let candidates = IMKCandidates(
 candidates.show(.below)
 ```
 
-### 组字（Composition）管理
+### 组字管理
 
 ```swift
 // 更新组字状态
@@ -126,6 +223,21 @@ let replaceRange = replacementRange()
 // 提交组字
 commitComposition(sender)
 ```
+
+### 部署核对清单
+
+释出前请确认以下所有项目均已处理：
+
+- [ ] **Info.plist:** `InputMethodServerControllerClass` = `IMKInputSessionController`（非自订子类）。
+- [ ] **Package.swift:** `IMKSwiftModernHeaders` target 设有 `cSettings: [.unsafeFlags(["-fno-objc-arc"])]`。
+- [ ] **注入时机：** 所有 `configure*` blocks 在 `applicationDidFinishLaunching` 内、**于** `IMKServer.init(name:bundleIdentifier:)` **之前**设定完成。
+- [ ] **KVC prune 路径：** 维护单调递增的 controller generation 计数器；当追踪的 controller 数量超过 2 时，透过 `[server valueForKeyPath:@"_private._controllers"] removeObjectForKey:oldKey]` 移除最旧的非活跃 controller。
+- [ ] **Session 路由：** 以 `generation % 2` parity 路由 controller 至 session（而非以 client 位址为键），使用恰好两枚预先配置的 static singleton。
+- [ ] **延迟释放：** `deactivateServer:` 后排程 3 秒计时器。触发时：释放持有的 blocks、调用 client wrapper 的 `+terminateForClient*` private class method、清除 controller↔session 对照表。若 controller 在时窗内被重新启用则取消计时器。
+- [ ] **XPC 清理：** 在 dealloc 时调用 client wrapper class 的 `+terminateForClientXPCConn:` / `+terminateForClientDOProxy:`。使用 `respondsToSelector:` 依序尝试：`_IPMDServerClientWrapperModern` → `_IPMDServerClientWrapperLegacy` → `IPMDServerClientWrapper`。（macOS 15 Sequoia 起将 wrapper class 拆分；macOS ≤ 10.15 使用无后缀名称。）
+- [ ] **Dangling pointer 防护：** 每次对 raw controller 位址调用 `takeUnretainedValue()` 前，先以 `IMKControllerLifetimeTracker.shared().isTracked(addr:)` 确认其仍存活。
+- [ ] **IME 选单注入：** 使用 `class_addMethod` + `imp_implementationWithBlock` 在执行期将选单动作注册至 `IMKInputSessionController`。无需 `@objc` Selector 暴露。
+- [ ] **内存指标：** 透过 `task_vm_info.internal` 读取 anonymous private memory（勿用 `phys_footprint`——后者在 Apple Silicon 上会计入 GPU/neural engine 共享内存）。读取前调用 `purgeMallocZones()` 以排干 allocator cache。
 
 ## 最佳实践
 
@@ -170,76 +282,21 @@ $(PRODUCT_BUNDLE_IDENTIFIER)_Connection
 </plist>
 ```
 
-### 3. 不要在控制器中强持有对象
+### 3. 使用 MRC 与极性双缓冲 Session 池
 
-**你的 `IMKInputSessionController` 子类不应直接持有业务逻辑对象。** 这对于处理高频率输入法切换（例如使用 CapsLock 在中英输入法之间切换）至关重要。
+**将 IMKSwiftModernHeaders target 以 `-fno-objc-arc` 编译。** ARC 在 MainActor 上的 retain/release 高频开销于 CapsLock 切换时导致可感知的卡顿。停用 ARC 可彻底消除卡顿，但需自行处理清理。
 
-当用户频繁切换输入法时，系统每次都会创建新的 `IMKInputController` 副本。如果你的控制器持有对大型对象的强引用，ARC 清理会造成明显的卡顿。
+对 IMKServer 在 macOS 10.9–27 的逆向工程揭露了一个根本缺陷：`_private._controllers` 以 client proxy 位址为键，而 CapsLock 切换会建立**全新**的 proxy（不同位址）。旧 controller 成为永久孤弃——`sessionFinished:` 永远不会对它们触发，因为 IMK 只向当前 proxy 派送信息。每次 CapsLock 切换都泄漏一个 IMKInputController 及其 NSXPCConnection。
 
-**建议模式：** 使用纯 Swift 实现的 LRU 缓存（容量 5），以客户端对象的整数 RAM 地址作为键值。与 `NSMapTable` 的弱键方案不同，Swift 原生的 LRU 表可以避免 autoreleasepool 纠缠——在 macOS 26.5 之前的系统上，这种纠缠会同时阻塞输入法和客户端应用程序。
+**建议架构（唯音输入法「Phase 115」）：**
 
-> **为何不用 NSMapTable？** 当 `NSMapTable` 释放弱键时，释放路径可能会在主线程上同步触发 autoreleasepool 排干（drain）。这会同时阻塞你的输入法和客户端应用程序（在 macOS 26.5 之前的系统上，Chrome 会随机卡顿 ≤20 秒）。使用固定容量的小型纯 Swift LRU 缓存可以完全避免此问题——你以放弃无界弱键语义为代价，换取确定性、有限的内存行为，绝不会阻塞 runloop。
+- **以 KVC 清理孤弃 controller：** 在 init 时分配单调递增的 generation number。当 `_controllers` 超过 2 个条目时，透过 KVC（`[server valueForKeyPath:@"_private._controllers"] removeObjectForKey:oldKey]`）移除最旧的非活跃 controller。
 
-```swift
-import IMKSwift
+- **极性双缓冲 Session 池：** 以 `generation % 2` 将 controller 路由至两枚 static `InputSession` singleton（偶数→session A，奇数→session B）。完全消除 LRU 缓存、动态分配与淘汰逻辑。
 
-@objc(MyInputMethodController)
-public final class MyInputMethodController: IMKInputSessionController {
-  // 使用对会话的弱引用
-  weak var session: InputSession?
+- **延迟释放与 XPC 清理：** `deactivateServer:` 后排程 3 秒计时器。触发时：释放 blocks、调用 client wrapper 的 private `+terminateForClient*`（依序尝试 `_IPMDServerClientWrapperModern` → `_IPMDServerClientWrapperLegacy` → `IPMDServerClientWrapper` 以兼容 macOS 27）、清除映射。若重新启动则取消。
 
-  override public init(server: IMKServer, delegate: Any?, client inputClient: any IMKTextInput) {
-    super.init(server: server, delegate: delegate, client: inputClient)
-
-    // 初始化或获取缓存的会话
-    self.session = InputSessionCache.session(for: inputClient, controller: self)
-  }
-}
-
-@MainActor
-final class InputSessionCache {
-  private static let capacity = 5
-  private static var keys: [Int] = []
-  private static var values: [InputSession] = []
-
-  static func session(for client: any IMKTextInput, controller: MyInputMethodController) -> InputSession {
-    let addr = Int(bitPattern: Unmanaged.passUnretained(client as AnyObject).toOpaque())
-    if let idx = keys.firstIndex(of: addr) {
-      let cached = values[idx]
-      // 移至最前（最近使用）
-      keys.remove(at: idx)
-      values.remove(at: idx)
-      keys.insert(addr, at: 0)
-      values.insert(cached, at: 0)
-      cached.reassign(controller: controller)
-      return cached
-    }
-    let newSession = InputSession(controller: controller)
-    keys.insert(addr, at: 0)
-    values.insert(newSession, at: 0)
-    if keys.count > capacity {
-      keys.removeLast()
-      values.removeLast()
-    }
-    return newSession
-  }
-}
-
-@MainActor
-final class InputSession {
-  weak var controller: MyInputMethodController?
-
-  init(controller: MyInputMethodController) {
-    self.controller = controller
-  }
-
-  func reassign(controller: MyInputMethodController) {
-    self.controller = controller
-  }
-}
-```
-
-> **注意：** `Unmanaged.passUnretained` 在这里是安全的——该指针仅用作客户端对象的稳定标识符，绝不会被解引用（dereference）。在 `session(for:controller:)` 执行期间，客户端对象保证存活（它是当前的文本输入客户端）。
+- **IME 选单注入：** 使用 `class_addMethod` + `imp_implementationWithBlock` 动态构建 IME 选单，无需 `@objc` Selector 暴露。注入即时指标：controller 存活数量与 anonymous private memory（`task_vm_info.internal`），读取前 purge malloc zones。
 
 ### 4. 以 Swift Package 库形式组织代码
 
