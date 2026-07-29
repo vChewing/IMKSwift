@@ -109,19 +109,19 @@ IMKSwift v26.07.24 adopts an **injection-based architecture**. You no longer sub
 
 | Block | Purpose | Signature |
 |-------|---------|-----------|
-| `configureActivatingServer` | Controller activated | `(clientAddr, selfAddr) -> Void` |
-| `configureDeactivatingServer` | Controller deactivated | `(clientAddr, selfAddr) -> Void` |
+| `configureActivatingServer` | Controller activated | `(ctlAddr) -> Void` |
+| `configureDeactivatingServer` | Controller deactivated | `(ctlAddr) -> Void` |
 | `configureDealloc` | Controller about to dealloc | `(selfAddr) -> Void` |
-| `configureShowingPreferences` | Show preferences | `(clientAddr, selfAddr) -> Void` |
+| `configureShowingPreferences` | Show preferences | `(ctlAddr) -> Void` |
 | `configureHidingPallettes` | Hide UI panels | `(selfAddr) -> Void` |
 | `configureInputControllerWillClose` | Controller will close | `(selfAddr) -> Void` |
 | `configureProvidingSelectionRange` | Provide selection range | `(selfAddr) -> NSRange` |
 | `configureProvidingIMEMenu` | Build IME menu | `(selfAddr) -> NSMenu?` |
-| `configureProvidingComposedString` | Provide composed string | `(clientAddr, selfAddr) -> Any?` |
-| `configureAutoCommittingComposition` | Auto-commit composition | `(clientAddr, selfAddr) -> Void` |
-| `configureProvidingRecognizedEvents` | Recognized event mask | `(clientAddr, selfAddr) -> NSUInteger` |
-| `configureHandlingGivenNullableEvent` | Handle NSEvent | `(nsEventPtr, clientAddr, selfAddr) -> Bool` |
-| `configureSettingObjCValue` | Handle `setValue:` | `(valuePtr, tag, clientAddr, selfAddr) -> Void` |
+| `configureProvidingComposedString` | Provide composed string | `(ctlAddr) -> Any?` |
+| `configureAutoCommittingComposition` | Auto-commit composition | `(ctlAddr) -> Void` |
+| `configureProvidingRecognizedEvents` | Recognized event mask | `(ctlAddr) -> NSUInteger` |
+| `configureHandlingGivenNullableEvent` | Handle NSEvent | `(nsEventPtr, ctlAddr) -> Bool` |
+| `configureSettingObjCValue` | Handle `setValue:` | `(valuePtr, intTag, ctlAddr) -> Void` |
 
 > **Note:** All addresses are `uintptr_t`. Use `UnsafeRawPointer(bitPattern:)` + `Unmanaged<...>.fromOpaque(...).takeUnretainedValue()` to recover objects on the Swift side. The `IMKControllerLifetimeTracker` should verify controller liveness before every `takeUnretainedValue()` call.
 
@@ -132,38 +132,38 @@ import IMKSwift
 
 // ── applicationDidFinishLaunching: inject ONCE before IMKServer init ──
 
-IMKInputSessionController.configureActivatingServer { clientAddr, selfAddr in
-  guard let session = InputSession.session(for: selfAddr) else { return }
+IMKInputSessionController.configureActivatingServer { ctlAddr in
+  guard let session = InputSession.session(for: ctlAddr) else { return }
   session.activate()
 }
 
-IMKInputSessionController.configureDeactivatingServer { clientAddr, selfAddr in
-  guard let session = InputSession.session(for: selfAddr) else { return }
+IMKInputSessionController.configureDeactivatingServer { ctlAddr in
+  guard let session = InputSession.session(for: ctlAddr) else { return }
   session.deactivate()
 }
 
 IMKInputSessionController.configureDealloc { selfAddr in
   // Delayed XPC cleanup + session mapping teardown
-  InputSession.cleanupController(addr: selfAddr)
+  InputSession.cleanupController(addr: ctlAddr)
 }
 
-IMKInputSessionController.configureHandlingGivenNullableEvent { nsEventPtr, clientAddr, selfAddr in
-  guard let session = InputSession.session(for: selfAddr) else { return false }
+IMKInputSessionController.configureHandlingGivenNullableEvent { nsEventPtr, ctlAddr in
+  guard let session = InputSession.session(for: ctlAddr) else { return false }
   guard let rawPtr = UnsafeRawPointer(bitPattern: nsEventPtr) else { return false }
   let event = Unmanaged<NSEvent>.fromOpaque(rawPtr).takeUnretainedValue()
   return session.handle(event: event)
 }
 
-IMKInputSessionController.configureShowingPreferences { clientAddr, selfAddr in
+IMKInputSessionController.configureShowingPreferences { ctlAddr in
   InputSession.showPreferences()
 }
 
 IMKInputSessionController.configureProvidingIMEMenu { selfAddr in
-  return InputSession.buildMenu(for: selfAddr)
+  return InputSession.buildMenu(for: ctlAddr)
 }
 
-IMKInputSessionController.configureProvidingComposedString { clientAddr, selfAddr in
-  return InputSession.session(for: selfAddr)?.currentComposedString
+IMKInputSessionController.configureProvidingComposedString { ctlAddr in
+  return InputSession.session(for: ctlAddr)?.currentComposedString
 }
 
 // ── Business logic (pure Swift, no IMK types inherited) ──
@@ -211,15 +211,31 @@ commitComposition(sender)
 ```
 
 ### Setup Checklist
+### IMKTextInput Client Proxy (`IMKClientProxyProtocol`)
+
+IMKSwift provides `IMKClientProxyProtocol`, an `@objc` Swift protocol whose primary purpose is to **prevent Swift ARC from ever retaining the IMKTextInput client object**. All proxy methods pass through to the client via raw ObjC message dispatch — no Swift ARC operations touch the client. Methods that return objects use a `retain`-inside-`@autoreleasepool` / `autorelease`-outside pattern; void methods are wrapped in `@autoreleasepool`.
+
+| Category | Example Methods |
+|----------|----------------|
+| Text insertion | `clientTextInsertion(with:replacementRange:)`, `clientMarkedTextSetup(with:selectionRange:replacementRange:)` |
+| Selection & range | `clientSelectedRange()`, `clientMarkedRange()`, `clientLength()`, `clientFirstRect(forCharacterRange:actualRange:)` |
+| Text query | `clientAttributedSubstring(fromRange:)`, `clientString(fromRange:actualRange:)`, `clientCharacterIndex(forPoint:tracking:inMarkedRange:)` |
+| Attributes | `clientAttributesForCharacterIndex(atU16Pos:lineHeightRectangle:)`, `clientValidAttributesForMarkedText()` |
+| Client metadata | `clientBundleIdentifier()`, `clientUniqueIdentifierString()`, `clientSupportsUnicode()`, `clientWindowLevel()`, `clientSupportsProperty(_:)` |
+| Mode control | `clientSelectMode(withModeIdentifier:)`, `clientOverrideKeyboard(withName:)` |
+| Layout helper | `clientLineHeightRect(forU16CursorPos:)` |
+| Appearance | `clientIsDarkMode()` — macOS 10.14+; false on ≤ 10.13 |
+
+All methods that return objects follow a `retain`-inside-`@autoreleasepool` / `autorelease`-outside pattern to prevent memory leaks at the Swift→ObjC MRC bridge boundary. Void methods are wrapped in `@autoreleasepool` to clean up autoreleased temporaries immediately.
 
 Before shipping, ensure all items below are addressed:
 
 - [ ] **Info.plist:** `InputMethodServerControllerClass` = `IMKInputSessionController` (not a custom subclass).
 - [ ] **Package.swift:** `IMKSwiftModernHeaders` target has `cSettings: [.unsafeFlags(["-fno-objc-arc"])]`.
 - [ ] **Injection timing:** All `configure*` blocks are set in `applicationDidFinishLaunching`, **before** `IMKServer.init(name:bundleIdentifier:)`.
-- [ ] **KVC prune path:** Maintain a monotonically increasing controller generation counter; when tracked controllers exceed 2, prune the oldest inactive one via `[server valueForKeyPath:@"_private._controllers"] removeObjectForKey:oldKey]`.
+- [ ] **KVC prune path:** Maintain a monotonically increasing controller generation counter; whenever possible, prune the oldest inactive one via `[server valueForKeyPath:@"_private._controllers"] removeObjectForKey:oldKey]`.
 - [ ] **Session routing:** Route controllers to sessions by `generation % 2` parity (not by client address), using exactly two preallocated static singletons.
-- [ ] **Delayed dealloc:** After `deactivateServer:`, schedule a 3-second timer. On fire: release retained blocks, call `+terminateForClient*` private class methods on the client wrapper, and clear controller↔session mappings. Cancel the timer if the controller is reactivated within the window.
+- [ ] **Delayed dealloc:** After `deactivateServer:`, schedule a 3-second timer (configurable). On fire:, call `+terminateForClient*` private class methods on the client wrapper, and clear controller↔session mappings. Cancel the timer if the controller is reactivated within the window.
 - [ ] **XPC cleanup:** On dealloc, call `+terminateForClientXPCConn:` / `+terminateForClientDOProxy:` on the client wrapper class. Use a `respondsToSelector:` fallback chain: `_IPMDServerClientWrapperModern` → `_IPMDServerClientWrapperLegacy` → `IPMDServerClientWrapper`. (macOS 15 Sequoia onward split the wrapper class; macOS ≤ 10.15 uses the unsuffixed name.)
 - [ ] **Dangling pointer protection:** Before every `takeUnretainedValue()` on a raw controller address, verify liveness via `IMKControllerLifetimeTracker.shared().isAddressAlive(addr)`. IMKSwift provides this tracker as part of the package — it automatically tracks every controller allocated through `IMKInputSessionController` and unregisters them on dealloc via an associated-object sentinel. Use `generationForAddress(_:)` for parity-based session routing.
 - [ ] **IME menu injection:** Use `class_addMethod` + `imp_implementationWithBlock` to register menu actions on `IMKInputSessionController` at runtime. No `@objc` selector exposure is needed.

@@ -909,23 +909,78 @@
 /// Each block receives raw `uintptr_t` memory addresses instead of object
 /// references — no retain/release is performed on the client or the controller.
 
-+ (void)IMKSwift_configureWithActivatingServer:(nullable void (^)(uintptr_t givenClientAddr, uintptr_t selfAddr))block NS_SWIFT_NAME(configureActivatingServer(_:));
-+ (void)IMKSwift_configureWithDeactivatingServer:(nullable void (^)(uintptr_t givenClientAddr, uintptr_t selfAddr))block NS_SWIFT_NAME(configureDeactivatingServer(_:));
-+ (void)IMKSwift_configureWithDealloc:(nullable void (^)(uintptr_t selfAddr))block NS_SWIFT_NAME(configureDealloc(_:));
-+ (void)IMKSwift_configureWithShowingPreferences:(nullable void (^)(uintptr_t givenClientAddr, uintptr_t selfAddr))block NS_SWIFT_NAME(configureShowingPreferences(_:));
-+ (void)IMKSwift_configureWithHidingPallettes:(nullable void (^)(uintptr_t selfAddr))block NS_SWIFT_NAME(configureHidingPallettes(_:));
-+ (void)IMKSwift_configureWithInputControllerWillClose:(nullable void (^)(uintptr_t selfAddr))block NS_SWIFT_NAME(configureInputControllerWillClose(_:));
-+ (void)IMKSwift_configureWithProvidingSelectionRange:(nullable NSRange (^)(uintptr_t selfAddr))block NS_SWIFT_NAME(configureProvidingSelectionRange(_:));
-+ (void)IMKSwift_configureWithProvidingIMEMenu:(nullable NSMenu * _Nullable (^)(uintptr_t selfAddr))block NS_SWIFT_NAME(configureProvidingIMEMenu(_:));
-+ (void)IMKSwift_configureWithProvidingComposedString:(nullable id _Nullable (^)(uintptr_t givenClientAddr, uintptr_t selfAddr))block NS_SWIFT_NAME(configureProvidingComposedString(_:));
-+ (void)IMKSwift_configureWithAutoCommittingComposition:(nullable void (^)(uintptr_t givenClientAddr, uintptr_t selfAddr))block NS_SWIFT_NAME(configureAutoCommittingComposition(_:));
-+ (void)IMKSwift_configureWithProvidingRecognizedEvents:(nullable NSUInteger (^)(uintptr_t givenClientAddr, uintptr_t selfAddr))block NS_SWIFT_NAME(configureProvidingRecognizedEvents(_:));
-+ (void)IMKSwift_configureWithHandlingGivenNullableEvent:(nullable BOOL (^)(uintptr_t nsEventPtr, uintptr_t givenClientAddr, uintptr_t selfAddr))block NS_SWIFT_NAME(configureHandlingGivenNullableEvent(_:));
-+ (void)IMKSwift_configureWithSettingObjCValue:(nullable void (^)(uintptr_t valuePtr, intptr_t intTag, uintptr_t givenClientAddr, uintptr_t selfAddr))block NS_SWIFT_NAME(configureSettingObjCValue(_:));
++ (void)IMKSwift_configureWithActivatingServer:(nullable void (^)(uintptr_t ctlAddr))block NS_SWIFT_NAME(configureActivatingServer(_:));
++ (void)IMKSwift_configureWithDeactivatingServer:(nullable void (^)(uintptr_t ctlAddr))block NS_SWIFT_NAME(configureDeactivatingServer(_:));
++ (void)IMKSwift_configureWithDealloc:(nullable void (^)(uintptr_t ctlAddr))block NS_SWIFT_NAME(configureDealloc(_:));
++ (void)IMKSwift_configureWithShowingPreferences:(nullable void (^)(uintptr_t ctlAddr))block NS_SWIFT_NAME(configureShowingPreferences(_:));
++ (void)IMKSwift_configureWithHidingPallettes:(nullable void (^)(uintptr_t ctlAddr))block NS_SWIFT_NAME(configureHidingPallettes(_:));
++ (void)IMKSwift_configureWithInputControllerWillClose:(nullable void (^)(uintptr_t ctlAddr))block NS_SWIFT_NAME(configureInputControllerWillClose(_:));
++ (void)IMKSwift_configureWithProvidingSelectionRange:(nullable NSRange (^)(uintptr_t ctlAddr))block NS_SWIFT_NAME(configureProvidingSelectionRange(_:));
++ (void)IMKSwift_configureWithProvidingIMEMenu:(nullable NSMenu * _Nullable (^)(uintptr_t ctlAddr))block NS_SWIFT_NAME(configureProvidingIMEMenu(_:));
++ (void)IMKSwift_configureWithProvidingComposedString:(nullable id _Nullable (^)(uintptr_t ctlAddr))block NS_SWIFT_NAME(configureProvidingComposedString(_:));
++ (void)IMKSwift_configureWithAutoCommittingComposition:(nullable void (^)(uintptr_t ctlAddr))block NS_SWIFT_NAME(configureAutoCommittingComposition(_:));
++ (void)IMKSwift_configureWithProvidingRecognizedEvents:(nullable NSUInteger (^)(uintptr_t ctlAddr))block NS_SWIFT_NAME(configureProvidingRecognizedEvents(_:));
++ (void)IMKSwift_configureWithHandlingGivenNullableEvent:(nullable BOOL (^)(uintptr_t nsEventPtr, uintptr_t ctlAddr))block NS_SWIFT_NAME(configureHandlingGivenNullableEvent(_:));
++ (void)IMKSwift_configureWithSettingObjCValue:(nullable void (^)(uintptr_t valuePtr, intptr_t intTag, uintptr_t ctlAddr))block NS_SWIFT_NAME(configureSettingObjCValue(_:));
 
 /// Returns the current controller generation counter (monotonically increasing),
 /// used by the parity-based double-buffered session pool.
 + (uint64_t)IMKSwift_currentGeneration NS_SWIFT_NAME(currentGeneration());
+
+// MARK: Client Proxy Methods — Safe IMKTextInput forwarding (no Swift ARC on client)
+
+/// These instance methods proxy `IMKTextInput` protocol calls through the
+/// ObjC (MRC) controller so that the `IMKTextInput` client object **never**
+/// crosses the ObjC→Swift language boundary.  Each method:
+/// - Resolves `[self client]` internally (pure ObjC MRC — no retain).
+/// - No-ops (or returns `nil`/`CGRectNull`) when `[self client]` is `NULL`.
+
+/// Returns `YES` if this controller currently has a connected client.
+- (BOOL)hasClient;
+
+/// Inserts text at the given replacement range. No-op if client is `NULL`.
+- (void)clientTextInsertionWith:(nonnull NSString *)text replacementRange:(NSRange)range;
+
+/// Sets marked text with selection and replacement ranges. No-op if client is `NULL`.
+- (void)clientMarkedTextSetupWith:(nonnull NSAttributedString *)text selectionRange:(NSRange)selRange replacementRange:(NSRange)repRange;
+
+/// Returns the bundle identifier of the client, or `nil`.
+- (nullable NSString *)clientBundleIdentifier;
+
+/// Selects an input mode. No-op if client is `NULL`.
+- (void)clientSelectModeWithModeIdentifier:(nonnull NSString *)mode;
+
+/// Overrides the keyboard layout. No-op if client is `NULL`.
+- (void)clientOverrideKeyboardWithName:(nonnull NSString *)name;
+
+/// Returns text attributes at a character index, or `nil` if client is `NULL`.
+/// `rect` is an in/out parameter for the line-height rectangle.
+- (nullable NSDictionary *)clientAttributesForCharacterIndexAtU16Pos:(NSUInteger)idx lineHeightRectangle:(nonnull NSRect *)rect;
+
+/// Returns the line-height rectangle for the given cursor position.
+/// Returns `CGRectNull` if client is `NULL`.
+- (CGRect)clientLineHeightRectForU16CursorPos:(NSUInteger)u16Cursor;
+
+- (CGRect)clientFirstRectForCharacterRange:(NSRange)range actualRange:(nullable NSRange *)actualRangeOut
+    NS_SWIFT_NAME(clientFirstRect(forCharacterRange:actualRange:));
+- (nullable NSString *)clientStringFromRange:(NSRange)range actualRange:(nullable NSRange *)actualRangeOut
+    NS_SWIFT_NAME(clientString(fromRange:actualRange:));
+- (nullable NSString *)clientUniqueIdentifierString;
+- (BOOL)clientSupportsUnicode;
+- (nullable NSArray *)clientValidAttributesForMarkedText;
+- (NSInteger)clientCharacterIndexForPoint:(CGPoint)point tracking:(NSInteger)tracking inMarkedRange:(nullable BOOL *)inMarkedRange
+    NS_SWIFT_NAME(clientCharacterIndex(forPoint:tracking:inMarkedRange:));
+- (NSInteger)clientLength;
+- (nullable NSAttributedString *)clientAttributedSubstringFromRange:(NSRange)range
+    NS_SWIFT_NAME(clientAttributedSubstring(fromRange:));
+- (NSRange)clientMarkedRange;
+- (NSRange)clientSelectedRange;
+- (int32_t)clientWindowLevel;
+- (BOOL)clientSupportsProperty:(unsigned int)property;
+
+// MARK: - IMKTextInput_NSAppearance
+
+- (BOOL)clientIsDarkMode;
 
 @end
 

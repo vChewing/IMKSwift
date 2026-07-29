@@ -109,19 +109,19 @@ IMKSwift 从 v26.07.24 起采用了**基于注入（Injection）的架构**，�
 
 | Block | 用途 | 签名 |
 |-------|------|------|
-| `configureActivatingServer` | Controller 被启用 | `(clientAddr, selfAddr) -> Void` |
-| `configureDeactivatingServer` | Controller 被停用 | `(clientAddr, selfAddr) -> Void` |
+| `configureActivatingServer` | Controller 被启用 | `(ctlAddr) -> Void` |
+| `configureDeactivatingServer` | Controller 被停用 | `(ctlAddr) -> Void` |
 | `configureDealloc` | Controller 即将释放 | `(selfAddr) -> Void` |
-| `configureShowingPreferences` | 显示偏好设定 | `(clientAddr, selfAddr) -> Void` |
+| `configureShowingPreferences` | 显示偏好设定 | `(ctlAddr) -> Void` |
 | `configureHidingPallettes` | 隐藏 UI 面板 | `(selfAddr) -> Void` |
 | `configureInputControllerWillClose` | Controller 即将关闭 | `(selfAddr) -> Void` |
 | `configureProvidingSelectionRange` | 提供选取范围 | `(selfAddr) -> NSRange` |
 | `configureProvidingIMEMenu` | 构建 IME 选单 | `(selfAddr) -> NSMenu?` |
-| `configureProvidingComposedString` | 提供组字内容 | `(clientAddr, selfAddr) -> Any?` |
-| `configureAutoCommittingComposition` | 自动递交组字 | `(clientAddr, selfAddr) -> Void` |
-| `configureProvidingRecognizedEvents` | 已识别的事件遮罩 | `(clientAddr, selfAddr) -> NSUInteger` |
-| `configureHandlingGivenNullableEvent` | 处理 NSEvent | `(nsEventPtr, clientAddr, selfAddr) -> Bool` |
-| `configureSettingObjCValue` | 处理 `setValue:` | `(valuePtr, tag, clientAddr, selfAddr) -> Void` |
+| `configureProvidingComposedString` | 提供组字内容 | `(ctlAddr) -> Any?` |
+| `configureAutoCommittingComposition` | 自动递交组字 | `(ctlAddr) -> Void` |
+| `configureProvidingRecognizedEvents` | 已识别的事件遮罩 | `(ctlAddr) -> NSUInteger` |
+| `configureHandlingGivenNullableEvent` | 处理 NSEvent | `(nsEventPtr, ctlAddr) -> Bool` |
+| `configureSettingObjCValue` | 处理 `setValue:` | `(valuePtr, intTag, ctlAddr) -> Void` |
 
 > **注意：** 所有位址均为 `uintptr_t`。使用 `UnsafeRawPointer(bitPattern:)` + `Unmanaged<...>.fromOpaque(...).takeUnretainedValue()` 在 Swift 端恢复对象。每次 `takeUnretainedValue()` 前应以 `IMKControllerLifetimeTracker` 复查 controller 是否仍存活。
 
@@ -132,42 +132,42 @@ import IMKSwift
 
 // ── applicationDidFinishLaunching 时一次性注入 ──
 
-IMKInputSessionController.configureActivatingServer { clientAddr, selfAddr in
+IMKInputSessionController.configureActivatingServer { ctlAddr in
   // controller 被激活：将 selfAddr 路由到对应的 InputSession
-  guard let session = InputSession.session(for: selfAddr) else { return }
+  guard let session = InputSession.session(for: ctlAddr) else { return }
   session.activate()
 }
 
-IMKInputSessionController.configureDeactivatingServer { clientAddr, selfAddr in
-  guard let session = InputSession.session(for: selfAddr) else { return }
+IMKInputSessionController.configureDeactivatingServer { ctlAddr in
+  guard let session = InputSession.session(for: ctlAddr) else { return }
   session.deactivate()
 }
 
 IMKInputSessionController.configureDealloc { selfAddr in
   // controller 即将释放：清理 session 映射，终止 XPC 连线
-  InputSession.cleanupController(addr: selfAddr)
+  InputSession.cleanupController(addr: ctlAddr)
 }
 
-IMKInputSessionController.configureHandlingGivenNullableEvent { nsEventPtr, clientAddr, selfAddr in
-  guard let session = InputSession.session(for: selfAddr) else { return false }
+IMKInputSessionController.configureHandlingGivenNullableEvent { nsEventPtr, ctlAddr in
+  guard let session = InputSession.session(for: ctlAddr) else { return false }
   let event = Unmanaged<NSEvent>.fromOpaque(
     UnsafeRawPointer(bitPattern: nsEventPtr)!
   ).takeUnretainedValue()
   return session.handle(event: event)
 }
 
-IMKInputSessionController.configureShowingPreferences { clientAddr, selfAddr in
+IMKInputSessionController.configureShowingPreferences { ctlAddr in
   // 叫出偏好设定画面
   InputSession.showPreferences()
 }
 
 IMKInputSessionController.configureProvidingIMEMenu { selfAddr in
   // 动态构建 IME 选单
-  return InputSession.buildMenu(for: selfAddr)
+  return InputSession.buildMenu(for: ctlAddr)
 }
 
-IMKInputSessionController.configureProvidingComposedString { clientAddr, selfAddr in
-  guard let session = InputSession.session(for: selfAddr) else { return nil }
+IMKInputSessionController.configureProvidingComposedString { ctlAddr in
+  guard let session = InputSession.session(for: ctlAddr) else { return nil }
   return session.currentComposedString
 }
 
@@ -223,6 +223,10 @@ let replaceRange = replacementRange()
 // 提交组字
 commitComposition(sender)
 ```
+
+### IMKTextInput Client Proxy (`IMKClientProxyProtocol`)
+
+IMKSwift provides `IMKClientProxyProtocol`, an `@objc` Swift protocol whose primary purpose is to **prevent Swift ARC from ever retaining the IMKTextInput client object**. All proxy methods pass through to the client via raw ObjC message dispatch — no Swift ARC operations touch the client. Methods that return objects use a `retain`-inside-`@autoreleasepool` / `autorelease`-outside pattern; void methods are wrapped in `@autoreleasepool`.
 
 ### 部署核对清单
 
