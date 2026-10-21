@@ -1,6 +1,6 @@
-// (c) 2026 and onwards The vChewing Project (MIT License).
+// (c) 2022 and onwards The vChewing Project (MulanPSL-2.0 License).
 // ====================
-// This code is released under the MIT license (SPDX-License-Identifier: MIT)
+// This code is released under the SPDX-License-Identifier: `MulanPSL-2.0`.
 
 /// @file IMKSwift.h
 /// @brief IMKSwift — Modernized InputMethodKit overlay for Swift 6 concurrency.
@@ -17,13 +17,27 @@
 ///
 /// Downstream Swift modules should `import IMKSwift` instead of
 /// `import InputMethodKit` to pick up these refinements.
+///
+/// @note **Private-surface caveat.** Some members of this overlay — see
+/// ``IMKServer(IMKSwift)`` and ``IMKInputSessionController`` — reach into
+/// undocumented internals of the system framework: `IMKServer._private`,
+/// `_IPMDServerClientWrapper*`, and the `+subclass` dispatch that decides
+/// whether the input method is handed a legacy or a modern server/client pair.
+/// Whether such an internal exists, and under which name, is a macOS
+/// implementation detail with no compatibility contract.  In particular, the
+/// flavour is chosen by the framework's own `+subclass` at runtime and is
+/// **not** a function of the SDK this project is built against: a build made
+/// against the legacy SDK still receives `_IMKServerLegacy` on a current
+/// system, and vice versa.  Every intervention here must therefore degrade to a
+/// no-op when the private member is absent, and each intervention that can be
+/// switched off has a `PrefMgr` toggle (the `_IMKSwift_*` keys, surfaced in
+/// Preferences → DevZone) so that a suspect behaviour can be turned off in a
+/// running process without a rebuild.
 
 #import <Carbon/Carbon.h>
 #import <Cocoa/Cocoa.h>
 #import <Foundation/Foundation.h>
 #import <InputMethodKit/InputMethodKit.h>
-
-// clang-format off
 
 // ==========================================================================
 // MARK: - @MainActor Scope for All Declarations Below
@@ -33,9 +47,8 @@
 // scope.  Enums, typedefs, and extern constants from the SDK imports above
 // are unaffected.
 
-#pragma clang attribute push(                                                  \
-    __attribute__((swift_attr("@MainActor"))),                                 \
-    apply_to = any(objc_method, objc_property))
+#pragma clang attribute push(__attribute__((swift_attr("@MainActor"))), \
+                             apply_to = any(objc_method, objc_property))
 
 // ==========================================================================
 #pragma mark - IMKCandidates
@@ -74,7 +87,8 @@
 /// Use ``initWithServer:panelType:`` or ``initWithServer:panelType:styleType:``
 /// instead.  This bare `init` is marked unavailable so that Swift callers are
 /// directed to the designated initializers that require an `IMKServer`.
-- (nonnull instancetype)init __attribute__((unavailable("Please use those constructors intentionally exposed to Swift.")));
+- (nonnull instancetype)init
+    __attribute__((unavailable("Please use those constructors intentionally exposed to Swift.")));
 
 /// Creates a candidate window associated with the given `IMKServer`.
 ///
@@ -176,8 +190,7 @@
 /// @param delegate        The delegate object that manages the sub-list interaction.
 ///                        Must respond to the `IMKServerInput` informal protocol's
 ///                        candidate-related methods.
-- (void)showSublist:(nonnull NSArray *)candidates
-    subListDelegate:(nonnull id)delegate;
+- (void)showSublist:(nonnull NSArray *)candidates subListDelegate:(nonnull id)delegate;
 
 /// Returns the screen-coordinate frame of the candidate window.
 ///
@@ -300,15 +313,13 @@
 /// `NSString` or an `NSAttributedString`.
 ///
 /// @param candidatesArray An array of candidate objects to display.
-- (void)setCandidateData:(nonnull NSArray *)candidatesArray
-    API_AVAILABLE(macosx(10.07));
+- (void)setCandidateData:(nonnull NSArray *)candidatesArray API_AVAILABLE(macosx(10.07));
 
 /// Selects the candidate with the given identifier.
 ///
 /// @param candidateIdentifier The identifier of the candidate to select.
 /// @return `YES` if the candidate was found and selected; `NO` otherwise.
-- (BOOL)selectCandidateWithIdentifier:(NSInteger)candidateIdentifier
-    API_AVAILABLE(macosx(10.07));
+- (BOOL)selectCandidateWithIdentifier:(NSInteger)candidateIdentifier API_AVAILABLE(macosx(10.07));
 
 /// Selects and highlights the candidate at the given identifier.
 ///
@@ -329,22 +340,19 @@
 /// @param candidateString A candidate string (typically an `NSString` or
 ///                        `NSAttributedString`) whose identifier is desired.
 /// @return The integer identifier associated with the candidate string.
-- (NSInteger)candidateStringIdentifier:(nonnull id)candidateString
-    API_AVAILABLE(macosx(10.07));
+- (NSInteger)candidateStringIdentifier:(nonnull id)candidateString API_AVAILABLE(macosx(10.07));
 
 /// Returns the currently selected candidate as an attributed string.
 ///
 /// @return The selected candidate as an `NSAttributedString`, or `nil` if
 ///         nothing is selected.
-- (nullable NSAttributedString *)selectedCandidateString
-    API_AVAILABLE(macosx(10.07));
+- (nullable NSAttributedString *)selectedCandidateString API_AVAILABLE(macosx(10.07));
 
 /// Returns the candidate identifier at the given visual line number.
 ///
 /// @param lineNumber The zero-based line number in the candidate panel.
 /// @return The identifier of the candidate displayed at that line.
-- (NSInteger)candidateIdentifierAtLineNumber:(NSInteger)lineNumber
-    API_AVAILABLE(macosx(10.07));
+- (NSInteger)candidateIdentifierAtLineNumber:(NSInteger)lineNumber API_AVAILABLE(macosx(10.07));
 
 /// Returns the visual line number for a candidate with the given identifier.
 ///
@@ -417,7 +425,8 @@
 ///
 /// Use ``initWithName:bundleIdentifier:`` or
 /// ``initWithName:controllerClass:delegateClass:`` instead.
-- (nonnull instancetype)init __attribute__((unavailable("Please use those constructors intentionally exposed to Swift.")));
+- (nonnull instancetype)init
+    __attribute__((unavailable("Please use those constructors intentionally exposed to Swift.")));
 
 /// Creates a server that connects using the given name and bundle identifier.
 ///
@@ -505,7 +514,8 @@
 /// Unavailable default initializer.
 ///
 /// Use ``initWithServer:delegate:client:`` instead.
-- (nonnull instancetype)init __attribute__((unavailable("Please use those constructors intentionally exposed to Swift.")));
+- (nonnull instancetype)init
+    __attribute__((unavailable("Please use those constructors intentionally exposed to Swift.")));
 
 /// Designated initializer.
 ///
@@ -600,7 +610,7 @@
 /// @param infoDictionary  A dictionary of supplemental information about the
 ///                        command.
 - (void)doCommandBySelector:(nonnull SEL)aSelector
-         commandDictionary:(nonnull NSDictionary *)infoDictionary;
+          commandDictionary:(nonnull NSDictionary *)infoDictionary;
 
 /// Hides all palette (floating tool) windows owned by this input method.
 ///
@@ -900,8 +910,152 @@
 /// @return An array of candidate objects, or `nil` if there are no candidates.
 - (nullable NSArray *)candidates:(nonnull id<IMKTextInput>)sender;
 
+// MARK: Deferred Dealloc & IME Lifecycle Callbacks
+
+// MARK: Class-Level Block Configuration (call once at startup)
+
+/// All `IMKInputController` overrides dispatch via **class-level static blocks**
+/// — set once from Swift at startup, shared by all controller instances.
+/// Each block receives raw `uintptr_t` memory addresses instead of object
+/// references — no retain/release is performed on the client or the controller.
+
++ (void)IMKSwift_configureWithActivatingServer:(nullable void (^)(uintptr_t ctlAddr))block
+    NS_SWIFT_NAME(configureActivatingServer(_:));
++ (void)IMKSwift_configureWithDeactivatingServer:(nullable void (^)(uintptr_t ctlAddr))block
+    NS_SWIFT_NAME(configureDeactivatingServer(_:));
++ (void)IMKSwift_configureWithDealloc:(nullable void (^)(uintptr_t ctlAddr))block
+    NS_SWIFT_NAME(configureDealloc(_:));
++ (void)IMKSwift_configureWithShowingPreferences:(nullable void (^)(uintptr_t ctlAddr))block
+    NS_SWIFT_NAME(configureShowingPreferences(_:));
++ (void)IMKSwift_configureWithHidingPallettes:(nullable void (^)(uintptr_t ctlAddr))block
+    NS_SWIFT_NAME(configureHidingPallettes(_:));
++ (void)IMKSwift_configureWithInputControllerWillClose:(nullable void (^)(uintptr_t ctlAddr))block
+    NS_SWIFT_NAME(configureInputControllerWillClose(_:));
++ (void)IMKSwift_configureWithProvidingSelectionRange:(nullable NSRange (^)(uintptr_t ctlAddr))block
+    NS_SWIFT_NAME(configureProvidingSelectionRange(_:));
++ (void)IMKSwift_configureWithProvidingIMEMenu:
+    (nullable NSMenu *_Nullable (^)(uintptr_t ctlAddr))block
+    NS_SWIFT_NAME(configureProvidingIMEMenu(_:));
++ (void)IMKSwift_configureWithProvidingComposedString:
+    (nullable id _Nullable (^)(uintptr_t ctlAddr))block
+    NS_SWIFT_NAME(configureProvidingComposedString(_:));
++ (void)IMKSwift_configureWithAutoCommittingComposition:(nullable void (^)(uintptr_t ctlAddr))block
+    NS_SWIFT_NAME(configureAutoCommittingComposition(_:));
++ (void)IMKSwift_configureWithProvidingRecognizedEvents:
+    (nullable NSUInteger (^)(uintptr_t ctlAddr))block
+    NS_SWIFT_NAME(configureProvidingRecognizedEvents(_:));
++ (void)IMKSwift_configureWithHandlingGivenNullableEvent:
+    (nullable BOOL (^)(uintptr_t nsEventPtr, uintptr_t ctlAddr))block
+    NS_SWIFT_NAME(configureHandlingGivenNullableEvent(_:));
++ (void)IMKSwift_configureWithSettingObjCValue:
+    (nullable void (^)(uintptr_t valuePtr, intptr_t intTag, uintptr_t ctlAddr))block
+    NS_SWIFT_NAME(configureSettingObjCValue(_:));
+
+/// Installs a diagnostic sink for the controller's own lifecycle paths
+/// (initialisation, activation, deactivation, stale-controller pruning and
+/// deferred dealloc).  The message travels as a UTF-8 C string so that no
+/// object crosses the ObjC→Swift boundary; the receiver is expected to perform
+/// its own debug-mode gating, hence the ObjC side may call the sink
+/// unconditionally.
++ (void)IMKSwift_configureWithLoggingHandler:(nullable void (^)(const char *_Nullable message))block
+    NS_SWIFT_NAME(configureLoggingHandler(_:));
+
+/// Installs the diagnostic kill-switches for the private-surface interventions
+/// listed in this class.  Each block is evaluated **at the decision point** and
+/// never cached, so flipping the corresponding `_IMKSwift_disable…` preference
+/// of a running process takes effect on the next occasion — that is what makes
+/// these usable as a live experiment rather than a rebuild-and-hope.
+///
+/// A block that was never installed (or a `nil` one) leaves its intervention
+/// **enabled**, i.e. the shipping behaviour; a block returning `YES` disables
+/// it.  The four switches are independent, but note the nesting:
+/// ``configureControllerDelayedDeallocationDisabled(_:)`` suppresses the whole
+/// deferred teardown (so neither the dealloc callback nor the client-wrapper
+/// teardown runs; the Swift-side session stays registered until the
+/// controller's real `-dealloc`), whereas
+/// ``configureClientWrapperTerminationDisabled(_:)`` runs the dealloc
+/// bookkeeping as usual and only spares the client wrapper's XPC connection.
+/// ``configureEvictedClientInvalidationDisabled(_:)`` sits one level deeper
+/// still: the eviction itself (which removes the controller's registration
+/// from `IMKServer`) proceeds, yet the evicted registration's client
+/// connection is spared, i.e. only the aggressive half of the eviction is
+/// switched off.  It therefore has no effect while
+/// ``configureServerControllerPruningDisabled(_:)`` suppresses the eviction.
++ (void)IMKSwift_configureWithServerControllerPruningDisabled:(nullable BOOL (^)(void))block
+    NS_SWIFT_NAME(configureServerControllerPruningDisabled(_:));
++ (void)IMKSwift_configureWithEvictedClientInvalidationDisabled:(nullable BOOL (^)(void))block
+    NS_SWIFT_NAME(configureEvictedClientInvalidationDisabled(_:));
++ (void)IMKSwift_configureWithClientWrapperTerminationDisabled:(nullable BOOL (^)(void))block
+    NS_SWIFT_NAME(configureClientWrapperTerminationDisabled(_:));
++ (void)IMKSwift_configureWithControllerDelayedDeallocationDisabled:(nullable BOOL (^)(void))block
+    NS_SWIFT_NAME(configureControllerDelayedDeallocationDisabled(_:));
+
+/// Returns the current controller generation counter (monotonically increasing),
+/// used by the parity-based double-buffered session pool.
++ (uint64_t)IMKSwift_currentGeneration NS_SWIFT_NAME(currentGeneration());
+
+// MARK: Client Proxy Methods — Safe IMKTextInput forwarding (no Swift ARC on client)
+
+/// These instance methods proxy `IMKTextInput` protocol calls through the
+/// ObjC (MRC) controller so that the `IMKTextInput` client object **never**
+/// crosses the ObjC→Swift language boundary.  Each method:
+/// - Resolves `[self client]` internally (pure ObjC MRC — no retain).
+/// - No-ops (or returns `nil`/`CGRectNull`) when `[self client]` is `NULL`.
+
+/// Returns `YES` if this controller currently has a connected client.
+- (BOOL)hasClient;
+
+/// Inserts text at the given replacement range. No-op if client is `NULL`.
+- (void)clientTextInsertionWith:(nonnull NSString *)text replacementRange:(NSRange)range;
+
+/// Sets marked text with selection and replacement ranges. No-op if client is `NULL`.
+- (void)clientMarkedTextSetupWith:(nonnull NSAttributedString *)text
+                   selectionRange:(NSRange)selRange
+                 replacementRange:(NSRange)repRange;
+
+/// Returns the bundle identifier of the client, or `nil`.
+- (nullable NSString *)clientBundleIdentifier;
+
+/// Selects an input mode. No-op if client is `NULL`.
+- (void)clientSelectModeWithModeIdentifier:(nonnull NSString *)mode;
+
+/// Overrides the keyboard layout. No-op if client is `NULL`.
+- (void)clientOverrideKeyboardWithName:(nonnull NSString *)name;
+
+/// Returns text attributes at a character index, or `nil` if client is `NULL`.
+/// `rect` is an in/out parameter for the line-height rectangle.
+- (nullable NSDictionary *)clientAttributesForCharacterIndexAtU16Pos:(NSUInteger)idx
+                                                 lineHeightRectangle:(nonnull NSRect *)rect;
+
+/// Returns the line-height rectangle for the given cursor position.
+/// Returns `CGRectNull` if client is `NULL`.
+- (CGRect)clientLineHeightRectForU16CursorPos:(NSUInteger)u16Cursor;
+
+- (CGRect)clientFirstRectForCharacterRange:(NSRange)range
+                               actualRange:(nullable NSRange *)actualRangeOut
+    NS_SWIFT_NAME(clientFirstRect(forCharacterRange:actualRange:));
+- (nullable NSString *)clientStringFromRange:(NSRange)range
+                                 actualRange:(nullable NSRange *)actualRangeOut
+    NS_SWIFT_NAME(clientString(fromRange:actualRange:));
+- (nullable NSString *)clientUniqueIdentifierString;
+- (BOOL)clientSupportsUnicode;
+- (nullable NSArray *)clientValidAttributesForMarkedText;
+- (NSInteger)clientCharacterIndexForPoint:(CGPoint)point
+                                 tracking:(NSInteger)tracking
+                            inMarkedRange:(nullable BOOL *)inMarkedRange
+    NS_SWIFT_NAME(clientCharacterIndex(forPoint:tracking:inMarkedRange:));
+- (NSInteger)clientLength;
+- (nullable NSAttributedString *)clientAttributedSubstringFromRange:(NSRange)range
+    NS_SWIFT_NAME(clientAttributedSubstring(fromRange:));
+- (NSRange)clientMarkedRange;
+- (NSRange)clientSelectedRange;
+- (int32_t)clientWindowLevel;
+- (BOOL)clientSupportsProperty:(unsigned int)property;
+
+// MARK: - IMKTextInput_NSAppearance
+
+- (BOOL)clientIsDarkMode;
+
 @end
 
 #pragma clang attribute pop
-
-// clang-format on

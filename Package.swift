@@ -22,7 +22,10 @@ let package = Package(
     ),
     .target(
       name: "IMKSwiftModernHeaders",
-      resources: []
+      resources: [],
+      cSettings: [
+        .unsafeFlags(["-fno-objc-arc"]),
+      ]
     ),
   ]
 )

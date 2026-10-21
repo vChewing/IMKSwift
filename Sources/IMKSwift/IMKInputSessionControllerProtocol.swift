@@ -1,6 +1,6 @@
-// (c) 2026 and onwards The vChewing Project (MIT License).
+// (c) 2022 and onwards The vChewing Project (MulanPSL-2.0 License).
 // ====================
-// This code is released under the MIT license (SPDX-License-Identifier: MIT)
+// This code is released under the SPDX-License-Identifier: `MulanPSL-2.0`.
 
 @_exported import IMKSwiftModernHeaders
 
@@ -22,7 +22,7 @@ extension IMKInputSessionController: IMKInputSessionControllerProtocol {}
 /// - Warning: Do not redefine this kind of protocols in Objective-C. Doing such
 /// will let you face issues of naming conflicts against certain ObjC methods.
 @objc
-public protocol IMKInputSessionControllerProtocol: AnyObject {
+public protocol IMKInputSessionControllerProtocol: AnyObject, NSObjectProtocol {
   // -- IMKStateSetting surface --
 
   func activateServer(_ sender: any IMKTextInput)
