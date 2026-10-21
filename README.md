@@ -4,7 +4,9 @@ A modernized **InputMethodKit** overlay for Swift 6 and later, providing safe, c
 
 ## Overview
 
-IMKSwift is part of the [vChewing Project](https://github.com/vChewing) and offers a Swift-native replacement for Apple's InputMethodKit framework. It combines Objective-C interoperability with Swift 6's strict concurrency model, delivering `@MainActor`-isolated APIs that are easier to work with in modern Swift code.
+IMKSwift is part of the [vChewing Project](https://github.com/vChewing) and offers a Swift-native overlay for Apple's InputMethodKit framework. It does two things at once.
+
+First, it re-declares IMK's Objective-C surface in Swift 6 terms: concrete types instead of `id`, explicit nullability, `@MainActor` isolation on every entry point. Second, it repairs the controller-lifetime defects that IMKServer has carried since 10.5 — defects that no header rewrite can reach, because they live in IMKServer's private state rather than in its declarations.
 
 InputMethodKit dates back to macOS 10.5 Leopard—predating ARC, Sandboxing, and Swift itself. It is a legacy framework spanning two generations of technology shifts. IMKSwift bridges this gap, allowing modern Swift developers to build input methods without wrestling with ancient Objective-C patterns.
 
@@ -14,6 +16,7 @@ Instead of struggling with unsafe casts, bare `id` types, and implicit global st
 - **Concrete, nullable-annotated types** instead of bare `id` pointers
 - **Full Swift 6 concurrency support**
 - **Complete InputMethodKit surface** with refinements for safe usage
+- **A repaired controller lifetime** built with `-fno-objc-arc`: address-keyed liveness tracking, orphan pruning, deferred teardown, client-wrapper termination, and four diagnostics-only kill switches
 
 ## Why IMKInputSessionController?
 
@@ -40,16 +43,25 @@ IMKSwift re-exports and enhances the following InputMethodKit components:
 - **IMKTextInput** — Text editing client protocols
 - **Supporting protocols** — IMKStateSetting, IMKMouseHandling, IMKServerInput
 
+### Controller Lifetime Repair
+
+The package also ships an Objective-C layer (`IMKSwiftModernHeaders`, compiled with `-fno-objc-arc`) that addresses what no header rewrite can:
+
+- every live controller is tracked by raw address in `IMKControllerLifetimeTracker`;
+- orphaned controllers are pruned out of IMKServer's private `_controllers` dictionary, and the client wrappers they hold are terminated;
+- controller teardown is deferred by three seconds after `deactivateServer:`, so rapid CapsLock toggling does not destroy a connection that is about to be reused;
+- four diagnostics-only switches and a stable log grammar make field incidents bisectable without shipping a custom build.
+
 ### Swift 6 Ready
 Built with Swift 6's strict concurrency model in mind. All APIs are properly isolated and can be used in concurrent contexts without data races.
 
 ## Requirements
 
-- **Swift** 6.2 or later
-- **Xcode** 16.0 or later
+- **Swift** 6.2 or newer
+- **Xcode** 16.0 or newer (26.x is what the current private-surface headers are exercised against)
 - **macOS**:
-    - macOS 10.13 High Sierra or later (depending on your Swift version).
-    - The code itself can run on macOS 10.09 Mavericks, but requires the corresponding macOS SDK and libARCLite.
+    - macOS 10.13 High Sierra or newer (this is the Swift Concurrency runtime floor; the exact floor depends on the Swift version).
+    - The code itself runs on macOS 10.9 Mavericks when built against a matching SDK with libARCLite.
 
 ## Installation
 
@@ -170,59 +182,36 @@ Here's a recommended `entitlements` file:
 </plist>
 ```
 
-### 3. Don't Hold Strong References in Your Controller
+### 3. Don't Hold Strong References in Your Controller — and Re-Bind the Client on Every Event
 
-**Your `IMKInputSessionController` subclass should not directly hold business logic objects.** This is critical for handling high-frequency input method switching (e.g., CapsLock toggling between ABC and your IME).
+Two rules, both learned the hard way.
 
-When users switch input methods rapidly, the system creates new `IMKInputController` instances each time. If your controller holds strong references to heavy objects, ARC cleanup causes noticeable lag.
+**Rule one: your `IMKInputSessionController` subclass must not strongly hold business-logic objects.** Every CapsLock toggle or client switch may create a new controller copy; the ARC churn of tearing down a large object graph on each toggle shows up as input latency.
 
-**Recommended Pattern:** Use a weak-key cache (`NSMapTable`) keyed by the client object:
+**Rule two: never treat the client address captured at activation as permanent.** IMKServer keys its private controller table by the client proxy's address, and the system hands you a fresh proxy whenever the client context churns. A session that remembers "my client is 0x…9d0" keeps dispatching to a controller that has already retired. The symptom is quiet: the mode-switch feedback still appears, but keystrokes never arrive.
+
+Dispatch sessions from a small pool keyed by the controller's own address, and re-adopt the client on every event:
 
 ```swift
-import IMKSwift
-
-@objc(MyInputMethodController)
-public final class MyInputMethodController: IMKInputSessionController {
-  // Use weak reference to session
-  weak var session: InputSession?
-  
-  override public init(server: IMKServer, delegate: Any?, client inputClient: any IMKTextInput) {
-    super.init(server: server, delegate: delegate, client: inputClient)
-    
-    // Initialize or retrieve cached session
-    self.session = InputSessionCache.session(for: inputClient, controller: self)
-  }
-}
-
 @MainActor
-final class InputSessionCache {
-  private static let cache = NSMapTable<NSObject, InputSession>.weakToStrongObjects()
-  
-  static func session(for client: any IMKTextInput, controller: MyInputMethodController) -> InputSession {
-    let clientObj = client as! NSObject
-    if let cached = cache.object(forKey: clientObj) {
-      cached.reassign(controller: controller)
-      return cached
-    }
-    let newSession = InputSession(controller: controller)
-    cache.setObject(newSession, forKey: clientObj)
-    return newSession
-  }
+final class SessionPool {
+  static let shared = SessionPool(capacity: 4)
+  private var slots: [UInt: InputSession] = [:]
+
+  func session(for ctlAddr: UInt) -> InputSession { /* ... */ }
+  func reap(using tracker: IMKControllerLifetimeTracker) { /* drop slots whose controller is gone */ }
 }
 
-@MainActor
-final class InputSession {
-  weak var controller: MyInputMethodController?
-  
-  init(controller: MyInputMethodController) {
-    self.controller = controller
-  }
-  
-  func reassign(controller: MyInputMethodController) {
-    self.controller = controller
-  }
-}
+// In the event callback, before dispatching:
+session.adoptClientAddr(ctlAddr)  // the sender is the authority, not the activation record
 ```
+
+Two corollaries worth internalizing:
+
+- **Do not wait for `-dealloc`.** IMKServer orphans controllers without ever releasing them, and `sessionFinished:` is dispatched per client proxy, so it never reaches the orphan. Reap sessions by asking the lifetime tracker whether the controller address is still alive.
+- **Do not kill the input method process before its bundle has been replaced.** IMK relaunches the IME on demand from the registered bundle; terminating it mid-install only brings the old code back under a new PID. Capture, terminate, escalate to `SIGKILL`, then verify — after the swap (see §7).
+
+The retired-copy hazard is worth one concrete note: if two controllers ever share a session slot, and the first one retires, the slot's client binding is cleared while the second keeps dispatching through it. That is exactly the failure mode of a parity-based double buffer, and it is why the pool is keyed by address and the binding is refreshed per event.
 
 ### 4. Structure as Swift Package Libraries
 
@@ -247,33 +236,47 @@ User memory is precious. While macOS 26's AppKit inefficiency may cause your inp
 - **Monitor memory usage** in `activateServer()` and self-terminate if exceeding 1024 MB (notify the user via `NSNotification`)
 - **Minimize NSWindow count** — Beginning with macOS 26, NSWindow memory is never reclaimed. Consolidate panels (tooltips, candidate windows, etc.) into a single `NSPanel` where possible
 
+### 7. Treat IMKServer's Private Surface as a Black Box with Observation Points
+
+You cannot fix IMKServer, and you cannot debug it with breakpoints. What you *can* do is make its behaviour observable, and make each of your own interventions individually switchable.
+
+IMKSwift's Objective-C layer therefore emits a small, stable vocabulary:
+
+| Token | Meaning |
+|---|---|
+| `ControllerInit:` | a controller copy was created, with its address and generation |
+| `Prune:` | the private `_controllers` table was inspected, or an orphan was evicted |
+| `ActivateServer:` / `DeactivateServer:` | client activation and retirement |
+| `DelayedDealloc:` | deferred teardown scheduled, skipped, or fired |
+| `EventEntry:` | which controller a key event was delivered to, and whether its client was still alive |
+| `guard fail:` | the event reached the IME, but no usable client proxy existed |
+
+On top of that, four diagnostics-only switches — installed through class methods, and wired by vChewing to its DevZone pane — let each intervention be disabled in isolation:
+
+| Switch | Disables |
+|---|---|
+| `configureServerControllerPruningDisabled(_:)` | the KVC prune |
+| `configureEvictedClientInvalidationDisabled(_:)` | invalidating the evicted controller's client entry (only the aggressive half of the eviction) |
+| `configureClientWrapperTerminationDisabled(_:)` | `+terminateForClient*` on the wrapper, keeping the dealloc bookkeeping |
+| `configureControllerDelayedDeallocationDisabled(_:)` | the whole deferred teardown |
+
+Each block is evaluated at the decision point and never cached, so flipping the corresponding `_IMKSwift_disable…` preference of a running process takes effect on the next occasion.
+
+The sixteen raw combinations collapse to nine distinguishable behaviours, because two of the switches are dominated by others. When a user reports "the modifier key stopped switching after a screenshot tool ran", you ask for those log tokens plus the four switch states; the log then tells you whether the event was never delivered, was delivered to a dead client, or was delivered to the wrong client — three different bugs with three different fixes, and no way to tell them apart without instrumentation.
+
 ## Architecture
 
 ### Structure
 
-- **IMKSwift** — Main Swift library with protocol definitions and extensions
-- **IMKSwiftModernHeaders** — Modernized Objective-C headers with `@MainActor` annotations and type refinements
+- **IMKSwift** — Main Swift library: protocol definitions, `@MainActor` extensions, and the Swift-side session plumbing
+- **IMKSwiftModernHeaders** — Modernized Objective-C headers, plus the MRC (`-fno-objc-arc`) private-surface layer: `IMKSwift.m` (hooks for pruning, delayed deallocation, and client-wrapper termination) and `IMKControllerLifetimeTracker.m` (address liveness and generation bookkeeping)
+- **Consumer side** — your `IMKInputSessionController` subclass, plus the session pool that survives address churn
 
-### The IMKInputSessionController Solution
+### Three Layers, Two Languages
 
-`IMKInputSessionController` is a concrete subclass of `IMKInputController` that exists solely to work around Swift/Objective-C interoperability limitations.
-
-**The Problem:**
-- `IMKInputController`'s original SDK headers expose APIs without `@MainActor` isolation
-- Swift imports these as non-isolated, causing strict concurrency errors
-- You cannot override headers for existing classes without API collisions
-
-**The Solution:**
-- Create a new subclass (`IMKInputSessionController`) with the same API surface
-- Apply `@MainActor` isolation via `#pragma clang attribute` in Objective-C
-- Swift sees a fresh class with properly isolated methods
-
-**What You Get:**
-- `@MainActor` isolation on all methods
-- Explicit nullability annotations (`_Nonnull` / `_Nullable`)
-- Concrete Objective-C types instead of bare `id`
-
-In the companion Swift module, `IMKInputSessionController` is extended to conform to `IMKInputSessionControllerProtocol`, a Swift-native `@MainActor` protocol that mirrors its full API surface.
+- **Declarations.** `IMKInputSessionController` is a concrete subclass of `IMKInputController` that exists solely to work around Swift/Objective-C interoperability limitations. The original SDK headers expose APIs without `@MainActor` isolation and cannot be redeclared without collisions, so a differently-named subclass is the only workable answer. It is `@MainActor`-annotated through `#pragma clang attribute`, and mirrors its full surface in the Swift-native `IMKInputSessionControllerProtocol`.
+- **Repairs.** Because the defects live in IMKServer's private state, the fixes have to be Objective-C: KVC access to `_private._controllers`, generation-bookkept pruning, a dealloc-time hook, and `+terminateForClient*` calls on the client wrapper classes. This code runs inside your IME process, compiled with `-fno-objc-arc` so that the retain/release churn of controller copies does not surface as input latency.
+- **Policy.** Which session each controller receives, when a session is rebound to a client, and when a session is retired are decisions your input method makes. IMKSwift supplies the addresses, the liveness checks, and the hook points; it deliberately does not own your session model.
 
 ## API Documentation
 
@@ -321,6 +324,9 @@ A main-actor-isolated protocol that encompasses:
 | **Nullability** | Implicit | Explicit annotations |
 | **Swift Support** | Basic bridging | Full Swift 6 integration |
 | **Base Class for Swift 6** | `IMKInputController` (broken) | `IMKInputSessionController` (working) |
+| **Controller Lifetime** | Leaks an orphaned controller per CapsLock toggle; `sessionFinished:` never arrives | Address-keyed tracking, KVC pruning, deferred teardown, wrapper termination |
+| **Client Binding** | Implicit, and stale after proxy churn | Re-established on every event |
+| **Observability** | Silent | Stable log vocabulary plus four diagnostics-only switches |
 
 ## Related Projects
 

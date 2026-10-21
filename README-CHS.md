@@ -4,16 +4,19 @@
 
 ## 概述
 
-IMKSwift 是 [唯音专案 (vChewing Project)](https://github.com/vChewing) 的一部分，提供了 Apple InputMethodKit 框架的 Swift 原生替代方案。它结合了 Objective-C 的互操作性和 Swift 6 严格的并发模型，提供了 `@MainActor` 隔离的 API，在现代 Swift 代码中更容易使用。
+IMKSwift 是 [唯音项目 (vChewing Project)](https://github.com/vChewing) 的一部分，为苹果的 InputMethodKit 框架提供 Swift 原生的封装层。它同时做两件事。
 
-InputMethodKit 的历史可追溯到 macOS 10.5 Leopard——早于 ARC、Sandbox 和 Swift 的问世。这是一个横跨两代技术变革的遗产级框架。IMKSwift 弥合了这道鸿沟，让现代 Swift 开发者无需与古老的 Objective-C 模式搏斗，就能构建输入法。
+其一，把 IMK 的 Objective-C 接口以 Swift 6 的语言重新声明：具体类型取代 `id`、明确的空值性、每个入口都标上 `@MainActor`。其二，修补 IMKServer 自 10.5 以来就带着的控制器生命周期缺陷——这类缺陷改多少次头文件都碰不到，因为它们住在 IMKServer 的私有状态里，不在声明里。
 
-与其艰难地处理不安全的类型转换、裸露的 `id` 类型和隐式的全局状态，IMKSwift 提供：
+InputMethodKit 的历史可追溯到 macOS 10.5 Leopard——早于 ARC、Sandbox 和 Swift 的问世。这是一个横跨两代技术变革的遗产级框架。IMKSwift 弥合这道鸿沟，让现代 Swift 开发者无需与古老的 Objective-C 模式搏斗，就能构建输入法。
+
+与其艰难地处理不安全的类型转换、裸露的 `id` 类型和隐含的全局状态，IMKSwift 提供：
 
 - **明确的 `@MainActor` 隔离** 在每个 API 上
-- **具体的、带有空值性（Nullability）注解的类型** 而非裸露的 `id` 指针
+- **具体的、空值性标注的类型** 而非裸露的 `id` 指针
 - **完整的 Swift 6 并发支持**
 - **完整的 InputMethodKit 接口** 以及安全使用的改进
+- **修补过的控制器生命周期**（以 `-fno-objc-arc` 编译）：按地址索引的存活追踪、孤儿控制器剔除、延迟拆除、客体连接终止，以及四个仅供诊断的 kill switch
 
 ## 为什么使用 IMKInputSessionController？
 
@@ -40,15 +43,24 @@ IMKSwift 重新导出并增强了以下 InputMethodKit 组件：
 - **IMKTextInput** — 文本编辑客户端协议
 - **辅助协议** — IMKStateSetting、IMKMouseHandling、IMKServerInput
 
+### 控制器生命周期之修补
+
+本套件另附一层 Objective-C（`IMKSwiftModernHeaders`，以 `-fno-objc-arc` 编译），处理那些改头文件永远碰不到的事：
+
+- 每一个存活的控制器都以原始地址登记于 `IMKControllerLifetimeTracker`；
+- 孤儿控制器会被从 IMKServer 的私有 `_controllers` 字典中剔除，其持有的客体连接包装对象亦一并终止；
+- `deactivateServer:` 之后延迟三秒才拆除控制器，使频繁的 CapsLock 切换不至于拆掉一条马上就会被重用的连接；
+- 四个仅供诊断的开关，加一套稳定的日志词汇，使现场事故无需另出特制版即可二分定位。
+
 ### 适配 Swift 6
 考虑到 Swift 6 严格的并发模型而构建。所有 API 都被适当隔离，可以在并发环境中使用而不会产生数据竞争。
 
 ## 系统要求
 
-- **Swift** 6.2 或更高版本
-- **Xcode** 16.0 或更高版本
+- **Swift** 6.2 或更新版本
+- **Xcode** 16.0 或更新版本（现行的私有面头文件系以 26.x 验证）
 - **macOS**：
-    - macOS 10.13 High Sierra 及更高版本（取决于使用的 Swift 版本）。
+    - macOS 10.13 High Sierra 及更新版本（此为 Swift Concurrency 的运行时下限；实际下限取决于 Swift 版本）。
     - 代码本身可在 macOS 10.09 Mavericks 上运行，但需要对应的 macOS SDK 与 libARCLite。
 
 ## 安装
@@ -170,59 +182,36 @@ $(PRODUCT_BUNDLE_IDENTIFIER)_Connection
 </plist>
 ```
 
-### 3. 不要在控制器中强持有对象
+### 3. 不要在控制器中强持有对象，且客体绑定必须逐事件重建
 
-**你的 `IMKInputSessionController` 子类不应直接持有业务逻辑对象。** 这对于处理高频率输入法切换（例如使用 CapsLock 在中英输入法之间切换）至关重要。
+两条铁律，都是踩出来的。
 
-当用户频繁切换输入法时，系统每次都会创建新的 `IMKInputController` 副本。如果你的控制器持有对大型对象的强引用，ARC 清理会造成明显的卡顿。
+**其一：你的 `IMKInputSessionController` 子类别不应强持有业务逻辑对象。** 每一次 CapsLock 切换或客体切换，都可能产生一个新的控制器副本；每切一次就拆掉一整张大型对象图，那样的 ARC churn 会直接反映成输入延迟。
 
-**建议模式：** 使用以客户对象键的弱键缓存（`NSMapTable`）：
+**其二：不要把「启用当下记下的客体地址」当成不变的事实。** IMKServer 是以客体代理的地址为键，维护它私有的控制器表；客体脉络一翻动，系统给你的就是一个新的代理。一个记着「我的客体是 0x…9d0」的会话，会继续把字送给一个早已退役的控制器。症状很安静：中英切换的提示照样出现，按键却从此不再送达。
+
+请以控制器自身的地址为键、从一个容量不超过四个的会话池派发，并在每一次事件上重新认领客体：
 
 ```swift
-import IMKSwift
-
-@objc(MyInputMethodController)
-public final class MyInputMethodController: IMKInputSessionController {
-  // 使用对会话的弱引用
-  weak var session: InputSession?
-  
-  override public init(server: IMKServer, delegate: Any?, client inputClient: any IMKTextInput) {
-    super.init(server: server, delegate: delegate, client: inputClient)
-    
-    // 初始化或获取缓存的会话
-    self.session = InputSessionCache.session(for: inputClient, controller: self)
-  }
-}
-
 @MainActor
-final class InputSessionCache {
-  private static let cache = NSMapTable<NSObject, InputSession>.weakToStrongObjects()
-  
-  static func session(for client: any IMKTextInput, controller: MyInputMethodController) -> InputSession {
-    let clientObj = client as! NSObject
-    if let cached = cache.object(forKey: clientObj) {
-      cached.reassign(controller: controller)
-      return cached
-    }
-    let newSession = InputSession(controller: controller)
-    cache.setObject(newSession, forKey: clientObj)
-    return newSession
-  }
+final class SessionPool {
+  static let shared = SessionPool(capacity: 4)
+  private var slots: [UInt: InputSession] = [:]
+
+  func session(for ctlAddr: UInt) -> InputSession { /* ... */ }
+  func reap(using tracker: IMKControllerLifetimeTracker) { /* 收掉控制器已死的槽位 */ }
 }
 
-@MainActor
-final class InputSession {
-  weak var controller: MyInputMethodController?
-  
-  init(controller: MyInputMethodController) {
-    self.controller = controller
-  }
-  
-  func reassign(controller: MyInputMethodController) {
-    self.controller = controller
-  }
-}
+// 在事件回调中、派发之前：
+session.adoptClientAddr(ctlAddr)  // 以送事件的人为准，而非启用时的记录
 ```
+
+两条推论值得写进脑子里：
+
+- **不要等 `-dealloc`。** IMKServer 会让控制器成为孤儿，却从不释放它；而 `sessionFinished:` 是按客体代理逐一派发的，永远到不了那个孤儿身上。请以生命周期追踪器查「该控制器地址是否仍存活」来回收会话。
+- **不要在包本体被替换之前就杀掉输入法进程。** IMK 会按需从已注册的包重启输入法；在安装中途终止它，只会让旧代码以新的 PID 回来。请在替换之后再抓取、终止、升级为 `SIGKILL`、并验证（见 §7）。
+
+「退役副本」的危险值得一句具体的说明：若两个控制器曾共用同一个会话槽，第一个退役时该槽的客体绑定会被清空，而第二个仍继续透过它派发。这正是一个「以奇偶配对的双缓冲」会出的毛病，也是本设计改以地址为键、并逐事件刷新绑定的理由。
 
 ### 4. 以 Swift Package 库形式组织代码
 
@@ -247,33 +236,47 @@ macOS 输入法无法使用断点调试——这会冻结客户端应用程序�
 - **在 `activateServer()` 中监控运存使用量**，若超过 1024 MB 则自我终止（通过 `NSNotification` 通知用户）
 - **最小化 NSWindow 数量** — 从 macOS 26 开始，NSWindow 的运存永远不会被系统回收。尽可能将面板（工具提示、候选词窗等）整合到单一 `NSPanel` 中
 
+### 7. 把 IMKServer 的私有面当成有观测点的黑箱
+
+你修不了 IMKServer，也没法用断点调试它。你能做的是：让它的行为可被观测，并且让你自己每一项干涉都能单独关掉。
+
+IMKSwift 的 Objective-C 层因此只吐一套很小、很稳定的词汇：
+
+| 词汇 | 含义 |
+|---|---|
+| `ControllerInit:` | 一个控制器副本被创建，含其地址与世代 |
+| `Prune:` | 检查了私有的 `_controllers` 表，或剔除了一条孤儿 |
+| `ActivateServer:` / `DeactivateServer:` | 客体的启用与退役 |
+| `DelayedDealloc:` | 延迟拆除被排定、跳过或执行 |
+| `EventEntry:` | 按键事件被投递到哪一个控制器、其客体是否仍存活 |
+| `guard fail:` | 事件已抵达输入法，但没有可用的客体代理 |
+
+在此之上，四个仅供诊断的开关（以类别方法安装；唯音把它们接到「开发者道场」面板）让每一项干涉都能被单独停用：
+
+| 开关 | 停用什么 |
+|---|---|
+| `configureServerControllerPruningDisabled(_:)` | KVC 修剪 |
+| `configureEvictedClientInvalidationDisabled(_:)` | 对被修剪控制器的客体条目作失效处理（只关掉淘汰行为中较激进的那一半） |
+| `configureClientWrapperTerminationDisabled(_:)` | 对包装对象调用 `+terminateForClient*`，但保留 dealloc 簿记 |
+| `configureControllerDelayedDeallocationDisabled(_:)` | 整个延迟拆除 |
+
+每一个 block 都是在「决策当下」求值、且从不缓存，所以对运行中的进程改动对应的 `_IMKSwift_disable…` 偏好设置，下一次就会生效。
+
+十六种原始组合实际只坍缩成九种可分辨的行为，因为其中两个开关被另两个所支配。当用户回报「跑过截图工具之后，修饰键就切不动了」，你只要那几个日志词汇与四个开关的状态；日志会告诉你：事件从未送达、事件送给了已死的客体、还是事件送给了错的客体——这是三种不同的病，有三种不同的修法，而没有观测点时你一种都分不出来。
+
 ## 架构
 
 ### 结构
 
-- **IMKSwift** — 包含协议定义与扩展的主要 Swift 库
-- **IMKSwiftModernHeaders** — 现代化的 Objective-C 头文件，具有 `@MainActor` 注解和类型改进
+- **IMKSwift** — 主要的 Swift 库：协议定义、`@MainActor` 扩展、以及 Swift 端的会话管线
+- **IMKSwiftModernHeaders** — 现代化的 Objective-C 头文件，以及 MRC（`-fno-objc-arc`）的私有面层：`IMKSwift.m`（剔除、延迟释放、客体连接终止之挂钩）与 `IMKControllerLifetimeTracker.m`（地址存活与世代簿记）
+- **消费端** — 你的 `IMKInputSessionController` 子类别，以及能在地址翻动中存活的会话池
 
-### IMKInputSessionController 解决方案
+### 三层、两种语言
 
-`IMKInputSessionController` 是 `IMKInputController` 的具体子类，它的存在完全是为了解决 Swift/Objective-C 互操作性限制。
-
-**问题所在：**
-- `IMKInputController` 的原始 SDK 头文件暴露的 API 没有 `@MainActor` 隔离
-- Swift 将这些导入为非隔离的，导致严格的并发错误
-- 你无法为现有类覆盖头文件而不造成 API 冲突
-
-**解决方案：**
-- 创建一个新的子类（`IMKInputSessionController`）具有相同的 API 接口
-- 通过 Objective-C 中的 `#pragma clang attribute` 应用 `@MainActor` 隔离
-- Swift 看到一个全新的类，其方法具有正确的隔离
-
-**你会得到什么：**
-- 所有方法都具有 `@MainActor` 隔离
-- 明确的空值性注解（`Nonnull` / `Nullable`）
-- 使用具体的 Objective-C 类型而非裸露的 `id`
-
-在配套的 Swift 模块中，`IMKInputSessionController` 被扩展以遵循 `IMKInputSessionControllerProtocol`，这是一个 Swift 原生的 `@MainActor` 协议，镜像了其完整的 API 接口。
+- **声明层。** `IMKInputSessionController` 是 `IMKInputController` 的具体子类别，存在目的只有一个：绕开 Swift 与 Objective-C 互通上的限制。原始 SDK 头文件暴露的 API 没有 `@MainActor` 隔离，又无法在不产生 API 冲突的前提下重新声明，因此一个改了名字的子类别是唯一可行的答案。它以 `#pragma clang attribute` 标上 `@MainActor`，并在 Swift 端以 `IMKInputSessionControllerProtocol` 镜像其完整接口。
+- **修补层。** 缺陷住在 IMKServer 的私有状态里，所以修法只能是 Objective-C：以 KVC 取得 `_private._controllers`、带世代簿记的剔除、dealloc 时机的挂钩、以及对客体连接包装类别调用 `+terminateForClient*`。这些代码跑在你的输入法进程内，以 `-fno-objc-arc` 编译，好让控制器副本的 retain／release churn 不至于浮现为输入延迟。
+- **策略层。** 哪一个控制器拿到哪一份会话、会话何时改绑客体、何时退役，都是你的输入法自己决定的事。IMKSwift 只提供地址、存活查询与挂钩点；它刻意不持有你的会话模型。
 
 ## API 文档
 
@@ -314,13 +317,16 @@ macOS 输入法无法使用断点调试——这会冻结客户端应用程序�
 
 ## 与原始 InputMethodKit 的差异
 
-| 功能 | InputMethodKit | IMKSwift |
-|------|----------------|----------|
+| 面向 | InputMethodKit | IMKSwift |
+|---------|----------------|----------|
 | **并发** | 无隔离 | 完整的 `@MainActor` 隔离 |
-| **类型安全** | 裸露的 `id` 类型 | 具体的命名类型 |
-| **空值性** | 隐式 | 明确注解 |
-| **Swift 支持** | 基本桥接 | 完整的 Swift 6 集成 |
-| **Swift 6 基础类** | `IMKInputController`（损坏） | `IMKInputSessionController`（正常） |
+| **类型安全** | 裸露的 `id` 类型 | 具体、具名的类型 |
+| **空值性** | 隐含 | 明确标注 |
+| **Swift 支持** | 基本桥接 | 完整的 Swift 6 整合 |
+| **Swift 6 的基类别** | `IMKInputController`（不可用） | `IMKInputSessionController`（可用） |
+| **控制器生命周期** | 每切一次 CapsLock 就漏掉一个孤儿控制器；`sessionFinished:` 永远不来 | 地址索引追踪、KVC 剔除、延迟拆除、客体连接终止 |
+| **客体绑定** | 隐含，且在代理翻动后失效 | 逐事件重建 |
+| **可观测性** | 沉默 | 稳定的日志词汇，加四个仅供诊断的开关 |
 
 ## 相关专案
 
